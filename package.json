@@ -1,0 +1,10 @@
+{
+  "name": "records-vessel",
+  "private": true,
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "bun-types": "1.4.4",
+    "typescript": "5.9.3"
+  }
+}
