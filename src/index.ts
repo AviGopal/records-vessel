@@ -47,7 +47,7 @@ const handle = async (req: Request): Promise<Response> => {
     const h = HANDLERS.get(p.type) as Handler
     return await h(p, who)
   } catch (e) {
-    return fail(400, String(e))
+    return Response.json({ failure: { status: 400, body: String(e) } }, { status: 400 })
   }
 }
 

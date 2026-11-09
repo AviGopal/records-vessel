@@ -42,8 +42,8 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
     for (const k of rows.filter((r) => r.shape === VESSEL_KEY).filter((r) => r.role === OWNER)) {
       keys.set(String(k.vessel_id), String(k.key_id))
     }
-    const allowed = [...keys.entries()].filter(([v]) => owners.includes(v)).map(([, k]) => k)
-    if (!allowed.includes(String(body.caller_key))) {
+    const allowed = new Set([...keys.entries()].filter(([v]) => owners.includes(v)).map(([, k]) => k))
+    if (!allowed.has(String(body.caller_key))) {
       return { status: 403, body: { failure: { status: 403, body: role } } }
     }
   }
