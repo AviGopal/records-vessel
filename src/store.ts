@@ -2,8 +2,9 @@
 import { appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
+import { grades } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -138,22 +139,20 @@ export const waitExact = (shapes: string[], afterSeq: number, where: Record<stri
 export const lastSeq = (): number => seq
 
 // A deadline row (described, with a within_ms records turned into `at`) has lapsed when its time has passed, no
-// answer row shares its request (the person row both cite), and no grade has judged it yet: a grade naming it in evidence_refs that records
-// stamped at or after its time, as the fold requires. A grade written before the deadline does not hide the lapse.
+// answer row shares its request (the person row both cite), and no grade the fold counts has judged it yet (one
+// predicate, fold.ts grades): a grade the fold refuses, early or otherwise, does not hide the lapse.
 // The two shapes come from the caller's pointer, so the owner's schema row decides what a deadline and an answer are.
 export const lapsed = (deadlineShape: string, answerShape: string, now: number): Row[] => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => byId.get(id)?.role === PERSON)
   const answered = new Set(rows.filter((r) => r.shape === answerShape).filter((r) => r.role === DESCRIBED).flatMap(asks))
-  const grades = rows.filter((r) => r.shape === OUTCOME)
-  const judged = (d: Row): boolean =>
-    grades.some((o) => [o.evidence_refs].flat().map(String).includes(d.id) && Date.parse(String(o.t)) >= Number(d.at))
+  const judged = new Set(grades(rows, seq, seq).filter((k) => k.ok).map((k) => k.judged))
   return rows
     .filter((r) => r.shape === deadlineShape)
     .filter((r) => r.role === DESCRIBED)
     .filter((r) => typeof r.within_ms === "number" && typeof r.at === "number" && r.at < now)
     .filter((r) => !asks(r).some((id) => answered.has(id)))
-    .filter((r) => !judged(r))
+    .filter((r) => !judged.has(r.id))
 }
 
 export const serveRead = (q: Query): Row[] => {

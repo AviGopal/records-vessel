@@ -152,6 +152,17 @@ describe("records vessel", () => {
     expect((got.body as Array<{ id: string }>).map((r) => r.id)).toContain(soon.id)
   })
 
+  test("a late grade the fold refuses (r 1 on a deadline) does not hide the lapse", async () => {
+    const desc = { writer: "described-test", role: "described" }
+    const ask = (await write(PERSON_KEY, { shape: "world_changed", what: "q4" })).body
+    const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, { writer: "walk-test", role: "walk" })).body
+    const d = (await write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)).body
+    await Bun.sleep(20)
+    await write(NODE_KEY, { shape: "outcome", r: 1, selection_ref: sel.id, input_refs: [ask.id, d.id], evidence_refs: [d.id] }, desc)
+    const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
+    expect((got.body as Array<{ id: string }>).map((r) => r.id)).toContain(d.id)
+  })
+
   test("a row's deadline comes from records' clock and its within_ms, never from the writer", async () => {
     const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, { writer: "walk-test", role: "walk" })).body
     const before = Date.now()

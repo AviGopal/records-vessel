@@ -7,14 +7,15 @@ export type Post = { cell: string; alpha: number; beta: number }
 const GIVEN = new Set([PERSON, OWNER])
 const GRADERS = new Set([DESCRIBED, PERSON])
 
-type Credit = { ok: boolean; r: number; key: string; cells: Set<string> }
+export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string> }
 
-export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] => {
+// Every grade among the rows, with whether it counts and what it judges. The fold folds the ones that count; the
+// lapse detector uses the same answer, so a grade the fold refuses never hides a lapse.
+export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const treated = (id: unknown): boolean => String(sels.get(String(id))?.arm) === TREATED
-  const priors = seen.filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
   // A grade (a person's verdict or a described outcome) judges one answer it saw: the answer in its input_refs, or, when
   // it saw several, the one its evidence_refs names. It credits the composition that made that answer: the answer's
   // selection and every earlier treated selection in that selection's pool. A described grade counts only when all it
@@ -22,7 +23,7 @@ export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): 
   // of an answer counts: a repeat replaces, never adds. A judged row that carries a deadline (within_ms, which records
   // made into `at`) lapsed rather than answered: its grade counts only as r 0 and only when records stamped the grade after the deadline, and it also
   // credits the treated steps the grader's selection held after that row, which are the waits that let it lapse.
-  const credit = (o: Row): Credit => {
+  const credit = (o: Row): Grade => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
     const answers = saw.filter((r) => r !== undefined && r.role === DESCRIBED && r.shape !== OUTCOME)
     const named = [o.evidence_refs].flat().filter((id) => id !== undefined).map(String)
@@ -36,14 +37,18 @@ export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): 
     const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref))) && timely
     const after = deadline ? [sels.get(String(o.selection_ref))?.pool_refs].flat().map((id) => sels.get(String(id))).filter((x) => x !== undefined && x.seq > Number(j?.seq)) : []
     const chain = ok ? [s, ...[s.pool_refs].flat().map((id) => sels.get(String(id))), ...after] : []
-    return { ok, r, key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id)).map((x) => String(x?.cell))) }
+    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id)).map((x) => String(x?.cell))) }
   }
-  const credits = seen
+  return seen
     .filter((r) => r.shape === OUTCOME)
     .filter((r) => GRADERS.has(r.role))
     .filter((r) => r.seq <= asOf)
     .map(credit)
-  const latest = new Map(credits.filter((k) => k.ok).map((k) => [k.key, k]))
+}
+
+export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] => {
+  const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
+  const latest = new Map(grades(all, asOf, atSeq).filter((k) => k.ok).map((k) => [k.key, k]))
   return cells.map((c) => {
     const counted = [...latest.values()].filter((k) => k.cells.has(c))
     const p0 = priors
