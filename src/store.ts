@@ -133,19 +133,22 @@ export const waitExact = (shapes: string[], afterSeq: number, where: Record<stri
 export const lastSeq = (): number => seq
 
 // A deadline row (described, with a numeric `at`) has lapsed when its time has passed, no answer row shares its
-// request (the person row both cite), and no grade cites it yet. The two shapes come from the caller's pointer, so the
-// owner's schema row decides what a deadline and an answer are; records names neither.
+// request (the person row both cite), and no grade has judged it yet: a grade naming it in evidence_refs that records
+// stamped at or after its time, as the fold requires. A grade written before the deadline does not hide the lapse.
+// The two shapes come from the caller's pointer, so the owner's schema row decides what a deadline and an answer are.
 export const lapsed = (deadlineShape: string, answerShape: string, now: number): Row[] => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => byId.get(id)?.role === PERSON)
   const answered = new Set(rows.filter((r) => r.shape === answerShape).filter((r) => r.role === DESCRIBED).flatMap(asks))
-  const cited = new Set(rows.filter((r) => r.shape === OUTCOME).flatMap((r) => [r.input_refs, r.evidence_refs].flat().map(String)))
+  const grades = rows.filter((r) => r.shape === OUTCOME)
+  const judged = (d: Row): boolean =>
+    grades.some((o) => [o.evidence_refs].flat().map(String).includes(d.id) && Date.parse(String(o.t)) >= Number(d.at))
   return rows
     .filter((r) => r.shape === deadlineShape)
     .filter((r) => r.role === DESCRIBED)
     .filter((r) => typeof r.at === "number" && r.at < now)
     .filter((r) => !asks(r).some((id) => answered.has(id)))
-    .filter((r) => !cited.has(r.id))
+    .filter((r) => !judged(r))
 }
 
 export const serveRead = (q: Query): Row[] => {

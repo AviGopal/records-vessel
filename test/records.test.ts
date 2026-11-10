@@ -138,6 +138,18 @@ describe("records vessel", () => {
     expect((await call(NODE_KEY, { type: "record_lapsed" })).status).toBe(400)
   })
 
+  test("a grade written before the deadline does not hide the lapse", async () => {
+    const walk = { writer: "walk-test", role: "walk" }
+    const desc = { writer: "described-test", role: "described" }
+    const ask = (await write(PERSON_KEY, { shape: "world_changed", what: "q3" })).body
+    const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, walk)).body
+    const soon = (await write(NODE_KEY, { shape: "due", at: Date.now() + 1500, selection_ref: sel.id, input_refs: [ask.id] }, desc)).body
+    await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, soon.id], evidence_refs: [soon.id] }, desc)
+    await Bun.sleep(2000)
+    const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
+    expect((got.body as Array<{ id: string }>).map((r) => r.id)).toContain(soon.id)
+  })
+
   test("registers record_lapsed as a shape it serves", () => {
     const body = discovery.seen.find((s) => s.path === "/register")?.body as { shapes: string[] }
     expect(body.shapes).toContain("record_lapsed")
