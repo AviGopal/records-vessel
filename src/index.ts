@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 import { type Who, authenticate } from "./auth"
-import { PORT } from "./config"
+import { PORT, VESSEL_ID } from "./config"
 import { fold } from "./fold"
 import { beat, register } from "./heartbeat"
-import { SERVE } from "./routes"
+import { HEALTH, SERVE } from "./routes"
 import { PERSON, POSTERIOR, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
 import { type Query, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
@@ -63,7 +63,7 @@ const handle = async (req: Request): Promise<Response> => {
 Bun.serve({
   port: PORT,
   idleTimeout: 0,
-  routes: { [SERVE]: { POST: handle } },
+  routes: { [SERVE]: { POST: handle }, [HEALTH]: { GET: () => Response.json({ vessel: VESSEL_ID }) } },
   fetch: () => fail(404, ""),
   error: (e) => {
     console.error(String(e))
