@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -131,6 +131,22 @@ export const waitExact = (shapes: string[], afterSeq: number, where: Record<stri
   })
 
 export const lastSeq = (): number => seq
+
+// A deadline row (described, with a numeric `at`) has lapsed when its time has passed, no answer row shares its
+// request (the person row both cite), and no grade cites it yet. The two shapes come from the caller's pointer, so the
+// owner's schema row decides what a deadline and an answer are; records names neither.
+export const lapsed = (deadlineShape: string, answerShape: string, now: number): Row[] => {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => byId.get(id)?.role === PERSON)
+  const answered = new Set(rows.filter((r) => r.shape === answerShape).filter((r) => r.role === DESCRIBED).flatMap(asks))
+  const cited = new Set(rows.filter((r) => r.shape === OUTCOME).flatMap((r) => [r.input_refs, r.evidence_refs].flat().map(String)))
+  return rows
+    .filter((r) => r.shape === deadlineShape)
+    .filter((r) => r.role === DESCRIBED)
+    .filter((r) => typeof r.at === "number" && r.at < now)
+    .filter((r) => !asks(r).some((id) => answered.has(id)))
+    .filter((r) => !cited.has(r.id))
+}
 
 export const serveRead = (q: Query): Row[] => {
   if (q.episode !== undefined) {

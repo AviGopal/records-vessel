@@ -4,8 +4,8 @@ import { PORT, VESSEL_ID } from "./config"
 import { fold } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { PERSON, POSTERIOR, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
-import { type Query, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
+import { PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
+import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
   type: string
@@ -15,6 +15,8 @@ type Pointer = Query & {
   as_of_seq: number
   writer?: string
   role?: string
+  deadline_shape?: string
+  answer_shape?: string
 }
 type Handler = (p: Pointer, who: Who) => Promise<Response>
 
@@ -37,6 +39,12 @@ const HANDLERS = new Map<string, Handler>([
   [RECORD_READ, async (p) => answer(200, serveRead(p))],
   [RECORD_WAIT, async (p) => answer(200, await wait(p.shapes, Number(p.after_seq)))],
   [RECORD_WAIT_EXACT, async (p) => answer(200, await waitExact(p.shapes, Number(p.after_seq), p.where))],
+  [RECORD_LAPSED, async (p) => {
+    if (p.deadline_shape === undefined || p.answer_shape === undefined) {
+      return fail(400, RECORD_LAPSED)
+    }
+    return answer(200, lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now()))
+  }],
   [POSTERIOR, async (p) => {
     const at = lastSeq()
     return answer(200, { at_seq: at, posts: fold(rows, p.cells, Number(p.as_of_seq), at) })
@@ -70,5 +78,5 @@ Bun.serve({
     process.exit(1)
   },
 })
-await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, POSTERIOR])
+await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_LAPSED, POSTERIOR])
 await beat()

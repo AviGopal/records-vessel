@@ -117,6 +117,32 @@ describe("records vessel", () => {
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b))
   })
 
+  test("record_lapsed lists a past deadline whose request has no answer and no grade", async () => {
+    const walk = { writer: "walk-test", role: "walk" }
+    const desc = { writer: "described-test", role: "described" }
+    const ask = (await write(PERSON_KEY, { shape: "world_changed", what: "q" })).body
+    const ask2 = (await write(PERSON_KEY, { shape: "world_changed", what: "q2" })).body
+    const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, walk)).body
+    const past = Date.now() - 60_000
+    const due = (at: number, req: string) => write(NODE_KEY, { shape: "due", at, selection_ref: sel.id, input_refs: [req] }, desc)
+    const lapsedDue = (await due(past, ask.id)).body
+    await due(Date.now() + 3_600_000, ask.id)
+    const answeredDue = (await due(past, ask2.id)).body
+    await write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask2.id] }, desc)
+    const gradedDue = (await due(past, ask.id)).body
+    await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, gradedDue.id], evidence_refs: [gradedDue.id] }, desc)
+    const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
+    expect(got.status).toBe(200)
+    expect((got.body as Array<{ id: string }>).map((r) => r.id)).toEqual([lapsedDue.id])
+    expect(answeredDue.id).toBeDefined()
+    expect((await call(NODE_KEY, { type: "record_lapsed" })).status).toBe(400)
+  })
+
+  test("registers record_lapsed as a shape it serves", () => {
+    const body = discovery.seen.find((s) => s.path === "/register")?.body as { shapes: string[] }
+    expect(body.shapes).toContain("record_lapsed")
+  })
+
   test("a missing boot value exits 1 and names it, never its value", async () => {
     const { METABOB_API_KEY: _, ...rest } = env()
     const { code, stderr } = await exitsNaming("src/index.ts", { ...rest, RECORDS_PORT: String(freePort()) })
