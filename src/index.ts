@@ -4,7 +4,7 @@ import { PORT } from "./config"
 import { fold } from "./fold"
 import { beat, register } from "./heartbeat"
 import { SERVE } from "./routes"
-import { POSTERIOR, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
+import { PERSON, POSTERIOR, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
 import { type Query, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -13,6 +13,8 @@ type Pointer = Query & {
   shapes: string[]
   cells: string[]
   as_of_seq: number
+  writer?: string
+  role?: string
 }
 type Handler = (p: Pointer, who: Who) => Promise<Response>
 
@@ -22,7 +24,14 @@ const answer = (status: number, value: unknown): Response => Response.json(value
 
 const HANDLERS = new Map<string, Handler>([
   [RECORD_WRITE, async (p, who) => {
-    const out = write(p.row, who.writer, who.role)
+    if (!who.self) {
+      const out = write(p.row, who.keyId, PERSON)
+      return answer(out.status, out.body)
+    }
+    if (p.writer === undefined || p.role === undefined) {
+      return fail(400, RECORD_WRITE)
+    }
+    const out = write(p.row, String(p.writer), String(p.role))
     return answer(out.status, out.body)
   }],
   [RECORD_READ, async (p) => answer(200, serveRead(p))],

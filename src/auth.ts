@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MIT
-import { IDENTITY_URL, OWNER_KEY_ID } from "./config"
-import { AUTH_SCHEME, IDENTITY_RESOLVE } from "./routes"
-import { AUTHENTICATION, OWNER, PERSON, VESSEL_KEY } from "./shapes"
-import { type Row, rows } from "./store"
+import { timingSafeEqual } from "node:crypto"
+import { IDENTITY_URL, KEY } from "./config"
+import { IDENTITY_RESOLVE } from "./routes"
+import { AUTHENTICATION } from "./shapes"
 
-export type Who = { ok: boolean; keyId: string; writer: string; role: string }
+export type Who = { ok: boolean; self: boolean; keyId: string }
 type Answer = { success: boolean; data: { authenticated: boolean; keyId: string } }
 
 const known = new Map<string, string>()
 
+const digest = (key: string): Buffer => new Bun.CryptoHasher("sha256").update(key).digest()
+
+const OWN = digest(KEY)
+
 export const keyOf = (req: Request): string => String(req.headers.get("authorization")).split(" ").slice(1).join(" ")
 
 const validate = async (key: string): Promise<string | undefined> => {
-  const h = new Bun.CryptoHasher("sha256").update(key).digest("hex")
+  const h = digest(key).toString("hex")
   const hit = known.get(h)
   if (hit !== undefined) {
     return hit
@@ -39,20 +43,13 @@ const validate = async (key: string): Promise<string | undefined> => {
 }
 
 export const authenticate = async (req: Request): Promise<Who> => {
-  const keyId = await validate(keyOf(req))
+  const key = keyOf(req)
+  if (timingSafeEqual(digest(key), OWN)) {
+    return { ok: true, self: true, keyId: "" }
+  }
+  const keyId = await validate(key)
   if (keyId === undefined) {
-    return { ok: false, keyId: "", writer: "", role: "" }
+    return { ok: false, self: false, keyId: "" }
   }
-  if (keyId === OWNER_KEY_ID) {
-    return { ok: true, keyId, writer: OWNER, role: OWNER }
-  }
-  const latest = new Map<string, Row>()
-  for (const r of rows.filter((x) => x.shape === VESSEL_KEY).filter((x) => x.role === OWNER)) {
-    latest.set(String(r.key_id), r)
-  }
-  const v = latest.get(keyId)
-  if (v === undefined) {
-    return { ok: true, keyId, writer: keyId, role: PERSON }
-  }
-  return { ok: true, keyId, writer: String(v.vessel_id), role: String(v.vessel_role) }
+  return { ok: true, self: false, keyId }
 }

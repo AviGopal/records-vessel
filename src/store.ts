@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, VESSEL_KEY,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -16,7 +16,7 @@ export type Query = {
   episode?: string
 }
 
-const OWNER_SHAPES = new Set([VESSEL_KEY, CHANNEL, SHAPE_SCHEMA, ARM, PRIOR])
+const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, ARM, PRIOR])
 const EXO_ROLES = new Set([PERSON, OWNER])
 const MINE = new Set([SELECTION, HOP, FAILURE])
 const FILE = join(DATA_DIR, "rows")
@@ -37,13 +37,7 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   }
   if (role === DESCRIBED) {
     const sels = rows.filter((r) => r.shape === SELECTION).filter((r) => r.id === String(body.selection_ref))
-    const owners = sels.map((r) => r.writer)
-    const keys = new Map<string, string>()
-    for (const k of rows.filter((r) => r.shape === VESSEL_KEY).filter((r) => r.role === OWNER)) {
-      keys.set(String(k.vessel_id), String(k.key_id))
-    }
-    const allowed = new Set([...keys.entries()].filter(([v]) => owners.includes(v)).map(([, k]) => k))
-    if (!allowed.has(String(body.caller_key))) {
+    if (sels.length === 0) {
       return { status: 403, body: { failure: { status: 403, body: role } } }
     }
   }
