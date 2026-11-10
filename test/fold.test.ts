@@ -53,6 +53,19 @@ describe("posterior fold", () => {
     expect(post([earlier, later], "c")).toEqual({ cell: "c", ...moved })
   })
 
+  test("a grade that saw several answers judges the one its evidence_refs names", () => {
+    const two = [ask.id, answer.id, otherAnswer.id]
+    expect(post([grade({ input_refs: two, evidence_refs: [answer.id] })], "c")).toEqual({ cell: "c", ...moved })
+    expect(post([grade({ input_refs: two, evidence_refs: ["not-seen"] })], "c")).toEqual({ cell: "c", ...still })
+    expect(post([verdict({ input_refs: [answer.id, otherAnswer.id], evidence_refs: [answer.id] })], "c")).toEqual({ cell: "c", ...moved })
+  })
+
+  test("a later invalid grade does not cancel an earlier valid one", () => {
+    const good = verdict({ r: 1 })
+    const junk = verdict({ r: 7 })
+    expect(post([good, junk], "c")).toEqual({ cell: "c", ...moved })
+  })
+
   test("a grade citing two answers, or none, or a missing row, does not count", () => {
     expect(post([grade({ input_refs: [ask.id, answer.id, otherAnswer.id] })], "c")).toEqual({ cell: "c", ...still })
     expect(post([verdict({ input_refs: [ask.id] })], "c")).toEqual({ cell: "c", ...still })
@@ -64,6 +77,24 @@ describe("posterior fold", () => {
     expect(post([verdict({ input_refs: [controlAnswer.id] })], "c")).toEqual({ cell: "c", ...still })
     expect(post([verdict({ input_refs: [controlAnswer.id] })], "step")).toEqual({ cell: "step", ...still })
     expect(post([grade({ selection_ref: controlSel.id })], "c")).toEqual({ cell: "c", ...still })
+  })
+
+  test("only a grade with r a number from 0 to 1 counts", () => {
+    expect(post([verdict({ r: 2 })], "c")).toEqual({ cell: "c", ...still })
+    expect(post([verdict({ r: "x" })], "c")).toEqual({ cell: "c", ...still })
+    expect(post([verdict({ r: undefined })], "c")).toEqual({ cell: "c", ...still })
+    expect(post([verdict({ r: -1 })], "c")).toEqual({ cell: "c", ...still })
+    expect(post([verdict({ r: 0.5 })], "c")).toEqual({ cell: "c", alpha: 1.5, beta: 1.5 })
+  })
+
+  test("a writer's latest grade of an answer replaces its earlier ones", () => {
+    const first = verdict({ r: 1 })
+    const again = verdict({ r: 1 })
+    const changed = verdict({ r: 0 })
+    expect(post([first, again], "c")).toEqual({ cell: "c", ...moved })
+    expect(post([first, again, changed], "c")).toEqual({ cell: "c", alpha: 1, beta: 2 })
+    const someoneElse = verdict({ r: 1, writer: "another-person" })
+    expect(post([first, someoneElse], "c")).toEqual({ cell: "c", alpha: 3, beta: 1 })
   })
 
   test("grades after as_of_seq are left out", () => {
