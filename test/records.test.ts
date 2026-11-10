@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { type Fake, exitsNaming, fake, freePort, healthy, run } from "./harness"
+import { type Fake, exitsNaming, fake, freePort, healthy, run, until } from "./harness"
 
 const NODE_KEY = "node-key-for-test"
 const PERSON_KEY = "person-key-for-test"
@@ -46,6 +46,7 @@ beforeAll(async () => {
   port = freePort()
   vessel = run("src/index.ts", env())
   await healthy(port)
+  await until(() => discovery.seen.some((s) => s.path === "/register"), "/register")
 })
 
 afterAll(() => {
