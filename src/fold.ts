@@ -28,7 +28,7 @@ export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): 
     const s = sels.get(String(judged[0]?.selection_ref))
     const clean = saw.every((r) => r !== undefined && (GIVEN.has(r.role) || answers.includes(r)))
     const r = Number(o.r)
-    const ok = Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref)))
+    const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref)))
     const chain = ok ? [s, ...[s.pool_refs].flat().map((id) => sels.get(String(id)))] : []
     return { ok, r, key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id)).map((x) => String(x?.cell))) }
   }

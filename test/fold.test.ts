@@ -85,6 +85,7 @@ describe("posterior fold", () => {
     expect(post([verdict({ r: undefined })], "c")).toEqual({ cell: "c", ...still })
     expect(post([verdict({ r: -1 })], "c")).toEqual({ cell: "c", ...still })
     expect(post([verdict({ r: 0.5 })], "c")).toEqual({ cell: "c", alpha: 1.5, beta: 1.5 })
+    for (const r of [null, "", "1", true, [1]]) expect(post([verdict({ r })], "c")).toEqual({ cell: "c", ...still })
   })
 
   test("a writer's latest grade of an answer replaces its earlier ones", () => {
