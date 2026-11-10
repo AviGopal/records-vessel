@@ -18,7 +18,9 @@ export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): 
   // the cell it grades. Anything else it was given (another grade, the walk's hops or failures) disqualifies it.
   const independent = (o: Row): boolean => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
-    const graded = saw.filter((r) => r !== undefined && r.role === DESCRIBED && cellOf.get(String(r.selection_ref)) === String(o.cell))
+    const graded = saw
+      .filter((r) => r !== undefined && r.role === DESCRIBED && r.shape !== OUTCOME)
+      .filter((r) => cellOf.get(String(r?.selection_ref)) === String(o.cell))
     const clean = saw.every((r) => r !== undefined && (GIVEN.has(r.role) || graded.includes(r)))
     return clean && graded.length > 0
   }

@@ -35,6 +35,14 @@ describe("posterior fold", () => {
     expect(fold([...base, earlier, later], ["c"], seq, seq)[0]).toEqual({ cell: "c", alpha: 2, beta: 1 })
   })
 
+  test("a grade made in the graded cell is never the answer another grade grades", () => {
+    const sameCellSel = row("selection", "walk", { arm: "treated", cell: "c" })
+    const earlier = row("outcome", "described", { cell: "c", r: 1, selection_ref: sameCellSel.id, producer: "model-a", input_refs: [ask.id, answer.id] })
+    const later = row("outcome", "described", { cell: "c", r: 0, selection_ref: outcomeSel.id, producer: "model-a", input_refs: [ask.id, earlier.id] })
+    // the earlier grade saw the request and the answer, so it counts; the later one saw only that grade, so it does not
+    expect(fold([...base, sameCellSel, earlier, later], ["c"], seq, seq)[0]).toEqual({ cell: "c", alpha: 2, beta: 1 })
+  })
+
   test("a grade whose answer was made in another cell does not count", () => {
     expect(one(grade({ input_refs: [ask.id, otherAnswer.id] }))).toEqual({ cell: "c", alpha: 1, beta: 1 })
   })
