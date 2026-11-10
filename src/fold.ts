@@ -16,7 +16,8 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const treated = (id: unknown): boolean => String(sels.get(String(id))?.arm) === TREATED
-  // A grade (a person's verdict or a described outcome) judges one answer it saw: the answer in its input_refs, or, when
+  // A grade (a person's verdict or a described outcome) judges one answer it saw (any described row that is not a grade,
+  // so a due row is answer-like: grading it r 1 credits the steps that made it): the answer in its input_refs, or, when
   // it saw several, the one its evidence_refs names. It credits the composition that made that answer: the answer's
   // selection and every earlier treated selection in that selection's pool. A described grade counts only when all it
   // saw was the request, owner rows and answers. r must be a number from 0 to 1, and only a writer's latest valid grade

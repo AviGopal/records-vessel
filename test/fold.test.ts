@@ -116,6 +116,17 @@ describe("posterior fold", () => {
     expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", ...still })
   })
 
+  test("a row with only a guessed `at` (no within_ms) is not a deadline: no waits are debited", () => {
+    const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
+    const guessed = row("due", "described", { selection_ref: dueSel.id, at: Date.parse("2026-11-09T11:29:42Z"), input_refs: [ask.id] })
+    const waitSel = row("selection", "walk", { arm: "treated", cell: "wait-cell" })
+    const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, guessed.id, waitSel.id] })
+    const g = row("outcome", "described", {
+      r: 0, selection_ref: graderSel.id, input_refs: [ask.id, guessed.id], evidence_refs: [guessed.id], t: "2026-11-10T12:30:00Z",
+    })
+    expect(fold([...base, dueSel, guessed, waitSel, graderSel, g], ["wait-cell"], seq, seq)[0]).toEqual({ cell: "wait-cell", ...still })
+  })
+
   test("grades after as_of_seq are left out", () => {
     const g = verdict({})
     expect(post([g], "c", g.seq - 1)).toEqual({ cell: "c", ...still })
