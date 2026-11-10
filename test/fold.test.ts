@@ -100,7 +100,7 @@ describe("posterior fold", () => {
 
   test("a lapsed deadline counts only as r 0, only after its time, and credits the waits that let it lapse", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id, stepSel.id] })
-    const due = row("due", "described", { selection_ref: dueSel.id, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
     const waitSel = row("selection", "walk", { arm: "treated", cell: "wait-cell" })
     const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id, waitSel.id] })
     const lapse = (fields: Record<string, unknown>) => row("outcome", "described", {

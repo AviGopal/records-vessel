@@ -19,8 +19,8 @@ export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): 
   // it saw several, the one its evidence_refs names. It credits the composition that made that answer: the answer's
   // selection and every earlier treated selection in that selection's pool. A described grade counts only when all it
   // saw was the request, owner rows and answers. r must be a number from 0 to 1, and only a writer's latest valid grade
-  // of an answer counts: a repeat replaces, never adds. A judged row that carries a deadline (`at`) lapsed rather than
-  // answered: its grade counts only as r 0 and only when records stamped the grade after the deadline, and it also
+  // of an answer counts: a repeat replaces, never adds. A judged row that carries a deadline (within_ms, which records
+  // made into `at`) lapsed rather than answered: its grade counts only as r 0 and only when records stamped the grade after the deadline, and it also
   // credits the treated steps the grader's selection held after that row, which are the waits that let it lapse.
   const credit = (o: Row): Credit => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
@@ -31,7 +31,7 @@ export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): 
     const clean = saw.every((r) => r !== undefined && (GIVEN.has(r.role) || answers.includes(r)))
     const r = Number(o.r)
     const j = judged[0]
-    const deadline = j !== undefined && typeof j.at === "number"
+    const deadline = j !== undefined && typeof j.within_ms === "number" && typeof j.at === "number"
     const timely = !deadline || (r === 0 && Date.parse(String(o.t)) >= Number(j?.at))
     const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref))) && timely
     const after = deadline ? [sels.get(String(o.selection_ref))?.pool_refs].flat().map((id) => sels.get(String(id))).filter((x) => x !== undefined && x.seq > Number(j?.seq)) : []

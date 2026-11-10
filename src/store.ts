@@ -42,7 +42,12 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
     }
   }
   seq = seq + 1
-  const unsigned = { input_refs: [], ...body, seq, t: new Date().toISOString(), writer, role }
+  const t = new Date().toISOString()
+  // A row that states how long it allows (within_ms) gets its deadline `at` from records' own clock, never from the
+  // writer: a producer has no clock, and a deadline it guessed was a day off.
+  const within = Number(body.within_ms)
+  const deadline = typeof body.within_ms === "number" && Number.isFinite(within) && within >= 0 ? { at: Date.parse(t) + within } : {}
+  const unsigned = { input_refs: [], ...body, ...deadline, seq, t, writer, role }
   const id = new Bun.CryptoHasher("sha256").update(JSON.stringify(unsigned)).digest("hex")
   const row: Row = { ...unsigned, shape: String(body.shape), id }
   appendFileSync(FILE, `${JSON.stringify(row)}\n`)
@@ -132,8 +137,8 @@ export const waitExact = (shapes: string[], afterSeq: number, where: Record<stri
 
 export const lastSeq = (): number => seq
 
-// A deadline row (described, with a numeric `at`) has lapsed when its time has passed, no answer row shares its
-// request (the person row both cite), and no grade has judged it yet: a grade naming it in evidence_refs that records
+// A deadline row (described, with a within_ms records turned into `at`) has lapsed when its time has passed, no
+// answer row shares its request (the person row both cite), and no grade has judged it yet: a grade naming it in evidence_refs that records
 // stamped at or after its time, as the fold requires. A grade written before the deadline does not hide the lapse.
 // The two shapes come from the caller's pointer, so the owner's schema row decides what a deadline and an answer are.
 export const lapsed = (deadlineShape: string, answerShape: string, now: number): Row[] => {
@@ -146,7 +151,7 @@ export const lapsed = (deadlineShape: string, answerShape: string, now: number):
   return rows
     .filter((r) => r.shape === deadlineShape)
     .filter((r) => r.role === DESCRIBED)
-    .filter((r) => typeof r.at === "number" && r.at < now)
+    .filter((r) => typeof r.within_ms === "number" && typeof r.at === "number" && r.at < now)
     .filter((r) => !asks(r).some((id) => answered.has(id)))
     .filter((r) => !judged(r))
 }

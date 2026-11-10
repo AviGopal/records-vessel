@@ -123,13 +123,15 @@ describe("records vessel", () => {
     const ask = (await write(PERSON_KEY, { shape: "world_changed", what: "q" })).body
     const ask2 = (await write(PERSON_KEY, { shape: "world_changed", what: "q2" })).body
     const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, walk)).body
-    const past = Date.now() - 60_000
-    const due = (at: number, req: string) => write(NODE_KEY, { shape: "due", at, selection_ref: sel.id, input_refs: [req] }, desc)
-    const lapsedDue = (await due(past, ask.id)).body
-    await due(Date.now() + 3_600_000, ask.id)
-    const answeredDue = (await due(past, ask2.id)).body
+    const due = (within_ms: number, req: string) => write(NODE_KEY, { shape: "due", within_ms, selection_ref: sel.id, input_refs: [req] }, desc)
+    const lapsedDue = (await due(1, ask.id)).body
+    await due(3_600_000, ask.id)
+    const answeredDue = (await due(1, ask2.id)).body
     await write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask2.id] }, desc)
-    const gradedDue = (await due(past, ask.id)).body
+    const gradedDue = (await due(1, ask.id)).body
+    await write(PERSON_KEY, { shape: "world_changed", what: "guessed" })
+    await write(NODE_KEY, { shape: "due", at: Date.now() - 86_400_000, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await Bun.sleep(20)
     await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, gradedDue.id], evidence_refs: [gradedDue.id] }, desc)
     const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
     expect(got.status).toBe(200)
@@ -143,11 +145,19 @@ describe("records vessel", () => {
     const desc = { writer: "described-test", role: "described" }
     const ask = (await write(PERSON_KEY, { shape: "world_changed", what: "q3" })).body
     const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, walk)).body
-    const soon = (await write(NODE_KEY, { shape: "due", at: Date.now() + 1500, selection_ref: sel.id, input_refs: [ask.id] }, desc)).body
+    const soon = (await write(NODE_KEY, { shape: "due", within_ms: 1500, selection_ref: sel.id, input_refs: [ask.id] }, desc)).body
     await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, soon.id], evidence_refs: [soon.id] }, desc)
     await Bun.sleep(2000)
     const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
     expect((got.body as Array<{ id: string }>).map((r) => r.id)).toContain(soon.id)
+  })
+
+  test("a row's deadline comes from records' clock and its within_ms, never from the writer", async () => {
+    const sel = (await write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c" }, { writer: "walk-test", role: "walk" })).body
+    const before = Date.now()
+    const due = (await write(NODE_KEY, { shape: "due", within_ms: 600_000, at: 1, selection_ref: sel.id }, { writer: "described-test", role: "described" })).body
+    expect(due.at).toBe(Date.parse(due.t) + 600_000)
+    expect(due.at).toBeGreaterThanOrEqual(before + 600_000)
   })
 
   test("registers record_lapsed as a shape it serves", () => {
