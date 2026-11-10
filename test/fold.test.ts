@@ -98,6 +98,24 @@ describe("posterior fold", () => {
     expect(post([first, someoneElse], "c")).toEqual({ cell: "c", alpha: 3, beta: 1 })
   })
 
+  test("a lapsed deadline counts only as r 0, only after its time, and credits the waits that let it lapse", () => {
+    const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id, stepSel.id] })
+    const due = row("due", "described", { selection_ref: dueSel.id, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const waitSel = row("selection", "walk", { arm: "treated", cell: "wait-cell" })
+    const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id, waitSel.id] })
+    const lapse = (fields: Record<string, unknown>) => row("outcome", "described", {
+      r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z", ...fields,
+    })
+    const rows = [dueSel, due, waitSel, graderSel]
+    const at = (g: Row, cell: string) => fold([...base, ...rows, g], [cell], seq, seq)[0]
+    const late = lapse({})
+    expect(at(late, "due-cell")).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
+    expect(at(late, "step")).toEqual({ cell: "step", alpha: 1, beta: 2 })
+    expect(at(late, "wait-cell")).toEqual({ cell: "wait-cell", alpha: 1, beta: 2 })
+    expect(at(lapse({ t: "2026-11-10T09:59:00Z" }), "due-cell")).toEqual({ cell: "due-cell", ...still })
+    expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", ...still })
+  })
+
   test("grades after as_of_seq are left out", () => {
     const g = verdict({})
     expect(post([g], "c", g.seq - 1)).toEqual({ cell: "c", ...still })
