@@ -65,7 +65,10 @@ Bun.serve({
   idleTimeout: 0,
   routes: { [SERVE]: { POST: handle } },
   fetch: () => fail(404, ""),
-  error: () => process.exit(1),
+  error: (e) => {
+    console.error(String(e))
+    process.exit(1)
+  },
 })
 await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, POSTERIOR])
 await beat()
