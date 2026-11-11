@@ -2,7 +2,7 @@
 import { appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
-import { grades } from "./fold"
+import { standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
@@ -92,7 +92,8 @@ export const read = (q: Query): Row[] => {
 const exogenous = (from: Row[]): Row[] =>
   from.filter((r) => EXO_ROLES.has(r.role)).filter((r) => !OWNER_SHAPES.has(r.shape))
 
-// A request is closed when a counted grade says how it ended (fold.ts grades, the fold's own predicate): DONE by a
+// A request is closed when a grade that stands says how it ended (fold.ts standing, the fold's own predicate: of a
+// writer's grades of one answer only the latest stands): DONE by a
 // person's verdict at r 1 on an answer to it; FAILED by a lapse (a counted r 0 on its deadline row). A described
 // outcome at r 1 is the walk grading its own answer and does not close a request: an independent grade (by information,
 // not only by a person) would, and is not built yet. "Answers it" is provenance: the judged row cites the request in
@@ -100,7 +101,7 @@ const exogenous = (from: Row[]): Row[] =>
 const closed = (): Set<string> => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const out = new Set<string>()
-  for (const g of grades(rows, seq, seq).filter((k) => k.ok)) {
+  for (const g of standing(rows, seq, seq)) {
     const ends = (g.r === 1 && g.by === PERSON) || (g.r === 0 && g.deadline)
     if (ends) for (const id of [byId.get(g.judged)?.input_refs].flat()) out.add(String(id))
   }
@@ -152,7 +153,7 @@ const rootRows = (w: string, root: Row): Row[] => {
 // ask still open, or one calling what the run never called, is not offered: it stays in the store, unread by the walk.
 const earned = (w: string): (t: Row) => boolean => {
   const byId = new Map(rows.map((r) => [r.id, r]))
-  const done = new Set(grades(rows, seq, seq).filter((k) => k.ok && k.r === 1 && k.by === PERSON)
+  const done = new Set(standing(rows, seq, seq).filter((k) => k.r === 1 && k.by === PERSON)
     .flatMap((k) => [byId.get(k.judged)?.input_refs].flat().map(String)))
   const sels = rows.filter((r) => r.shape === SELECTION && r.writer === w)
   const started = new Map(rows.filter((r) => r.shape === HOP && r.writer === w && r.phase === "started").map((r) => [String(r.call_id), String(r.pointer_type)]))
@@ -246,7 +247,7 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number)
   const byId = new Map(rows.map((r) => [r.id, r]))
   const exo = new Set(exogenous(rows).map((r) => r.id))
   const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => exo.has(id))
-  const judged = new Set(grades(rows, seq, seq).filter((k) => k.ok).map((k) => k.judged))
+  const judged = new Set(standing(rows, seq, seq).map((k) => k.judged))
   const done = closed()
   // A request's deadline is its FIRST deadline row: a later one, written after an answer, does not move it, or a
   // request answered only by its own walk would renew its deadline forever and never close. Only a person's verdict

@@ -56,6 +56,11 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     .map(credit)
 }
 
+// The grades that stand: those that count, and of each writer's grades of one answer only the latest (a repeat
+// replaces, never adds), as the fold below folds them. A person who grades an answer r 1 and then r 0 has not closed it.
+export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] =>
+  [...new Map(grades(all, asOf, atSeq).filter((k) => k.ok).map((k) => [k.key, k])).values()]
+
 // A move that failed, as the vessel it called said: a 4xx answer blames the request the move made (a template call
 // naming no channel, a pointer missing its fields). It counts as r 0 for that move's cell only: the selection that made
 // the call, treated, by the walk that wrote the failure; once per selection; never its chain, since it produced nothing.
@@ -80,7 +85,7 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
 
 export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
-  const latest = new Map([...grades(all, asOf, atSeq).filter((k) => k.ok), ...moveFailures(all, asOf, atSeq)].map((k) => [k.key, k]))
+  const latest = new Map([...standing(all, asOf, atSeq), ...moveFailures(all, asOf, atSeq)].map((k) => [k.key, k]))
   return cells.map((c) => {
     const counted = [...latest.values()].filter((k) => k.cells.has(c))
     const p0 = priors

@@ -312,6 +312,18 @@ describe("the walk's episode", () => {
     expect(await sharedIds(r)).not.toContain(t.id)
   })
 
+  test("[MUST-FAIL] a person who grades an answer r 1 and then r 0 has not closed the request, nor earned a template", async () => {
+    const r = await fresh()
+    const run = await reached(r, 1)
+    const answer = (await r.episodes()).roots.find((x) => x.root.id === run.a.id)
+    expect(answer).toBeUndefined() // r 1 alone closes it
+    const answers = ((await r.call(NODE_KEY, { type: "record_read", shape: "answer" })) as Array<{ id: string }>)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [answers[0].id] }) // the same person takes it back
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toContain(run.a.id)
+    const t = await run.template(["git_worktree", "git_commit"])
+    expect(await sharedIds(r)).not.toContain(t.id)
+  })
+
   test("with no request open, the walk idles on its arm, as before", async () => {
     const r = await fresh()
     const arm = await r.arm()
