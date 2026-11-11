@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { type Who, authenticate } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
-import { fold } from "./fold"
+import { foldFrom } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
 import { GAP, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
@@ -59,7 +59,7 @@ const HANDLERS = new Map<string, Handler>([
   }],
   [POSTERIOR, async (p) => {
     const at = lastSeq()
-    return answer(200, { at_seq: at, posts: fold(rows, p.cells, Number(p.as_of_seq), at) })
+    return answer(200, { at_seq: at, posts: foldFrom(rows, p.cells, Number(p.as_of_seq), at) })
   }],
 ])
 

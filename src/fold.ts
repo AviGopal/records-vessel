@@ -83,16 +83,35 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
   return [...out.values()]
 }
 
-export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] => {
+// A cell is the move and everything it saw ("<move>|<context>": the shapes, the asker, the age), so the same cell
+// rarely comes twice and most draws were made at the prior: nothing learned carried to the next request. A cell with no
+// counted evidence of its own backs off to a coarser one that has some: the same move for the same asker, then the same
+// move anywhere. The finest level with evidence answers, each grade counted once, and the answer says which (from).
+// An owner prior still belongs to the exact cell.
+type Level = "cell" | "asker" | "move" | "none"
+const move = (c: string): string => c.split("|")[0]
+const asker = (c: string): string | undefined => c.split("|").slice(1).join("|").split(",").find((t) => t.startsWith("asker:"))
+
+export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
-  const latest = new Map([...standing(all, asOf, atSeq), ...moveFailures(all, asOf, atSeq)].map((k) => [k.key, k]))
+  const latest = [...new Map([...standing(all, asOf, atSeq), ...moveFailures(all, asOf, atSeq)].map((k) => [k.key, k])).values()]
   return cells.map((c) => {
-    const counted = [...latest.values()].filter((k) => k.cells.has(c))
+    const levels: Array<[Level, (x: string) => boolean]> = [
+      ["cell", (x) => x === c],
+      ["asker", (x) => move(x) === move(c) && asker(c) !== undefined && asker(x) === asker(c)],
+      ["move", (x) => move(x) === move(c)],
+    ]
+    const [from, counted] = levels
+      .map(([level, at]): [Level, Grade[]] => [level, latest.filter((k) => [...k.cells].some(at))])
+      .find(([, ks]) => ks.length > 0) ?? ["none", []]
     const p0 = priors
       .filter((r) => String(r.cell) === c)
       .reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
     const wins = counted.reduce((s, k) => s + k.r, 0)
     const losses = counted.reduce((s, k) => s + (1 - k.r), 0)
-    return { cell: c, alpha: p0.alpha + wins, beta: p0.beta + losses }
+    return { cell: c, alpha: p0.alpha + wins, beta: p0.beta + losses, from }
   })
 }
+
+export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] =>
+  foldFrom(all, cells, asOf, atSeq).map(({ cell, alpha, beta }) => ({ cell, alpha, beta }))

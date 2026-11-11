@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, test } from "bun:test"
+import * as F from "../src/fold"
 import { fold } from "../src/fold"
 import type { Row } from "../src/store"
 
@@ -211,6 +212,45 @@ describe("a step whose move failed", () => {
     const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id, waitSel.id] })
     const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
     expect(fold([ask, dueSel, due, waitSel, graderSel, lapse], ["wait-cell"], seq, seq)[0]).toEqual({ cell: "wait-cell", alpha: 1, beta: 2 })
+  })
+})
+
+describe("a cell with no evidence of its own backs off to a coarser one", () => {
+  const ask = row("world_changed", "person", { what: "q" })
+  const A = "produce/answer/ch1"
+  const cell = (ctx: string, who = "person") => `${A}|${ctx},asker:${who},age:0`
+  // one graded composition per (cell, r): an answer whose selection is that cell, judged by a person
+  const graded = (c: string, r: number): Row[] => {
+    const sel = row("selection", "walk", { arm: "treated", cell: c, pool_refs: [ask.id] })
+    const answer = row("answer", "described", { selection_ref: sel.id, input_refs: [ask.id] })
+    return [sel, answer, row("outcome", "person", { r, input_refs: [answer.id], writer: `p-${sel.id}` })]
+  }
+  const post = (rows: Row[], c: string) => fold([ask, ...rows], [c], seq, seq)[0]
+
+  test("[MUST-FAIL] a cell never graded takes the evidence of the same move for the same asker", () => {
+    const rows = [...graded(cell("hop"), 1), ...graded(cell("hop,failure"), 1)]
+    expect(post(rows, cell("answer,hop"))).toEqual({ cell: cell("answer,hop"), alpha: 3, beta: 1 })
+  })
+
+  test("[MUST-FAIL] with none for that asker, the same move anywhere", () => {
+    const rows = graded(cell("hop", "owner"), 0)
+    expect(post(rows, cell("hop", "person"))).toEqual({ cell: cell("hop", "person"), alpha: 1, beta: 2 })
+  })
+
+  test("[MUST-FAIL] the answer says which level it came from", () => {
+    const rows = [...graded(cell("hop"), 1), ...graded(cell("x", "owner"), 0)]
+    const from = (c: string) => F.foldFrom?.([ask, ...rows], [c], seq, seq)[0]?.from
+    expect([from(cell("hop")), from(cell("y")), from(cell("y", "detector")), from("produce/due/ch1|hop,asker:person,age:0")])
+      .toEqual(["cell", "asker", "move", "none"])
+  })
+
+  test("the finest level with evidence answers: a cell's own grades are not mixed with the move's (a guard)", () => {
+    const rows = [...graded(cell("hop"), 1), ...graded(cell("other"), 0), ...graded(cell("other2"), 0)]
+    expect(post(rows, cell("hop"))).toEqual({ cell: cell("hop"), alpha: 2, beta: 1 })
+  })
+
+  test("another move's evidence is never shared (a guard)", () => {
+    expect(post(graded(cell("hop"), 1), "produce/due/ch1|hop,asker:person,age:0")).toEqual({ cell: "produce/due/ch1|hop,asker:person,age:0", alpha: 1, beta: 1 })
   })
 })
 
