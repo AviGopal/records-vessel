@@ -2,7 +2,7 @@
 import { appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
-import { standing } from "./fold"
+import { blames, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
@@ -49,7 +49,9 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   // writer: a producer has no clock, and a deadline it guessed was a day off.
   const within = Number(body.within_ms)
   const deadline = typeof body.within_ms === "number" && Number.isFinite(within) && within >= 0 ? { at: Date.parse(t) + within } : {}
-  const unsigned = { input_refs: [], ...body, ...deadline, seq, t, writer, role }
+  // A walk's failure row carries whom it blames, decided by records (fold.ts blames), never by the writer.
+  const blame = String(body.shape) === FAILURE && role === WALK ? { blames: blames(body) } : {}
+  const unsigned = { input_refs: [], ...body, ...deadline, ...blame, seq, t, writer, role }
   const id = new Bun.CryptoHasher("sha256").update(JSON.stringify(unsigned)).digest("hex")
   const row: Row = { ...unsigned, shape: String(body.shape), id }
   appendFileSync(FILE, `${JSON.stringify(row)}\n`)
@@ -192,8 +194,16 @@ export const episode = (w: string): Row[] => {
 
 // Every open root with its own rows, oldest first, and the rows they share listed once: which request to work is the
 // walk's selection to make, not this store's. With none open, the walk's newest arm, as it idles.
-export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[] }> } =>
-  ({ shared: shared(w), roots: openRoots(w).map((root) => ({ root, rows: rootRows(w, root) })) })
+// Whether anyone awaits an answer on a root: a person's or the owner's request does; the walk's arm (idling) and a gap a
+// detector opened do not, so the walk may wait on them unbounded. Stated here, where roots are made, so the walk reads it
+// and never needs to know a shape's name.
+export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => {
+  const gaps = new Set(openGaps(rows).map((r) => r.id))
+  return {
+    shared: shared(w),
+    roots: openRoots(w).map((root) => ({ root, rows: rootRows(w, root), awaits: root.shape !== ARM && !gaps.has(root.id) })),
+  }
+}
 
 // Answers the first row scan finds, rescanning on every write. Given a deadline it answers null at that time and
 // withdraws its waker, so a wait that ended empty stops rescanning: one left behind per timed-out wait would rescan

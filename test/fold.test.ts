@@ -161,6 +161,11 @@ describe("a move that failed", () => {
     ]) expect(post([f], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 1 })
   })
 
+  test("[MUST-FAIL] a failure records stamped as blaming the request is debited, a 200 refusal included; one blaming the callee is not", () => {
+    expect(post([fail(sel, { status: 200, blames: "request" })], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 2 })
+    expect(post([fail(sel, { status: 422, blames: "callee" })], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 1 })
+  })
+
   test("[MUST-FAIL] a failure credits no chain: the steps before it are untouched", () => {
     expect(post([fail(chained, {})], "run/t2")).toEqual({ cell: "run/t2", alpha: 1, beta: 2 })
     expect(post([fail(chained, {})], "step2")).toEqual({ cell: "step2", alpha: 1, beta: 1 })

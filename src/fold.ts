@@ -61,15 +61,25 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] =>
   [...new Map(grades(all, asOf, atSeq).filter((k) => k.ok).map((k) => [k.key, k])).values()]
 
-// A move that failed, as the vessel it called said: a 4xx answer blames the request the move made (a template call
-// naming no channel, a pointer missing its fields). It counts as r 0 for that move's cell only: the selection that made
-// the call, treated, by the walk that wrote the failure; once per selection; never its chain, since it produced nothing.
-// Not counted: 401 and 403 (they blame the caller's credentials, which rotate, not the request), 408 and 429 (the callee
-// was busy), 5xx, timeouts and transport errors (an outage is not the move's fault),
-// and the walk declining to run or record (kind skip or too_big). Kept apart from grades(): what closes a request and
-// what lapses never read it, and its key cannot replace a grade's.
+// Whom a move's failure blames, decided once, here, and stamped on the failure row when it is written (store.ts), so
+// every reader (this fold, and the walk deciding whether to call the same pointer again) reads one answer:
+//   request: the vessel called answered and refused what was asked: a 200 carrying an error, or a 4xx other than
+//            401/403 (the caller's credentials, which rotate) and 408/429 (the callee was busy);
+//   callee:  anything else, an outage, a timeout or a transport error: not the move's fault;
+//   walk:    the walk declined to run or record it (a kind of its own: skip, too_big, unrunnable).
 const NOT_THE_REQUEST = new Set([401, 403, 408, 429])
-const BLAMES_REQUEST = (status: number): boolean => status >= 400 && status < 500 && !NOT_THE_REQUEST.has(status)
+export const blames = (f: Record<string, unknown>): "request" | "callee" | "walk" => {
+  if (f.kind !== undefined) return "walk"
+  const s = f.status
+  return typeof s === "number" && (s === 200 || (s >= 400 && s < 500 && !NOT_THE_REQUEST.has(s))) ? "request" : "callee"
+}
+// A row written before the stamp keeps the rule it was counted by then: a 4xx that blames the request.
+const blamed = (f: Row): string => typeof f.blames === "string" ? f.blames
+  : (f.kind === undefined && typeof f.status === "number" && f.status !== 200 && blames(f) === "request" ? "request" : "callee")
+
+// A move whose failure blames the request counts as r 0 for that move's cell only: the selection that made the call,
+// treated, by the walk that wrote the failure; once per selection; never its chain, since it produced nothing. Kept
+// apart from grades(): what closes a request and what lapses never read it, and its key cannot replace a grade's.
 export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
@@ -77,7 +87,7 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
   for (const f of seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.seq <= asOf)) {
     const s = sels.get(String(f.selection_ref))
     if (s === undefined || String(s.arm) !== TREATED || s.writer !== f.writer) continue
-    if (f.kind !== undefined || typeof f.status !== "number" || !BLAMES_REQUEST(f.status)) continue
+    if (blamed(f) !== "request") continue
     out.set(s.id, { ok: true, r: 0, judged: s.id, key: `fail|${s.id}`, cells: new Set([String(s.cell)]), by: WALK, deadline: false })
   }
   return [...out.values()]

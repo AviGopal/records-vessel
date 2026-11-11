@@ -324,6 +324,32 @@ describe("the walk's episode", () => {
     expect(await sharedIds(r)).not.toContain(t.id)
   })
 
+  test("[MUST-FAIL] every root says whether an answer is awaited: a person's ask does; a detector's gap and the walk's arm do not", async () => {
+    const r = await fresh()
+    await r.arm()
+    const g = await gap(r, "g1", "open")
+    const a = await r.ask("hello")
+    const by = new Map((await r.episodes()).roots.map((x: any) => [x.root.id, x.awaits]))
+    expect([by.get(g.id), by.get(a.id)]).toEqual([false, true])
+    const idle = await fresh()
+    const arm = await idle.arm()
+    expect(((await idle.episodes()).roots as any[]).find((x) => x.root.id === arm.id)?.awaits).toBe(false)
+  })
+
+  test("[MUST-FAIL] a walk's failure row is stamped with whom it blames, by records, whatever the writer said", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("x")
+    const sel = await r.select(a.id)
+    const stamp = async (f: Record<string, unknown>) =>
+      (await r.write(NODE_KEY, { shape: "failure", selection_ref: sel.id, input_refs: [sel.id], ...f }, walk)).blames
+    expect([
+      await stamp({ status: 422, blames: "callee" }), await stamp({ status: 200 }), await stamp({ status: 400 }),
+      await stamp({ status: 503 }), await stamp({ status: 401 }), await stamp({ status: 429 }), await stamp({ status: 0 }),
+      await stamp({ kind: "skip" }),
+    ]).toEqual(["request", "request", "request", "callee", "callee", "callee", "callee", "walk"])
+  })
+
   test("with no request open, the walk idles on its arm, as before", async () => {
     const r = await fresh()
     const arm = await r.arm()
