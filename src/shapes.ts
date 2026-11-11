@@ -16,6 +16,9 @@ export const SHAPE_SCHEMA = "shape_schema"
 // The owner's description of a shape that something other than a producer writes (a detector's gap): configuration, read
 // by whoever reads that shape, never work for the walk.
 export const SHAPE_DESCRIPTION = "shape_description"
+// The owner's precondition on a call: the shape it names is called only when the root holds a row its needs and where
+// describe. Configuration, read by the walk where it chooses, never work.
+export const REQUIRES = "requires"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.

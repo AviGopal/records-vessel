@@ -176,6 +176,20 @@ describe("the walk's episode", () => {
     expect(await r.lapsed()).toEqual([])
   })
 
+  test("[MUST-FAIL] the owner's precondition on a call is configuration every root shares, never a request; only the owner writes one", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const req = await r.write(NODE_KEY, { shape: "requires", for: "git_worktree", needs: "change_wanted", where: { wanted: true } }, owner)
+    let all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([arm.id]) // idle: nothing to work
+    expect(all.shared.map((x) => x.id)).toContain(req.id)
+    const a = await r.ask("hello")
+    all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([a.id])
+    expect(all.shared.map((x) => x.id)).toContain(req.id)
+    expect((await r.write(PERSON_KEY, { shape: "requires", for: "x", needs: "y" })).failure?.status).toBe(403)
+  })
+
   test("[MUST-FAIL] the owner's description of a shape is configuration, not a request", async () => {
     const r = await fresh()
     await r.arm()
