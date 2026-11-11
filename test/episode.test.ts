@@ -129,6 +129,20 @@ describe("the walk's episode", () => {
     expect(await r.episode()).not.toContain(second.id)
   })
 
+  test("[MUST-FAIL] a row the walk recorded from a tool's answer is in its request's episode, and only in its request's", async () => {
+    const r = await fresh()
+    const first = await r.ask("first")
+    const second = await r.ask("second")
+    const mine = await r.select(first.id)
+    const theirs = await r.select(second.id)
+    const diff = await r.write(NODE_KEY, { shape: "gitDiff", tree: "t1", selection_ref: mine.id, input_refs: [first.id] }, walk)
+    const other = await r.write(NODE_KEY, { shape: "gitDiff", tree: "t2", selection_ref: theirs.id, input_refs: [second.id] }, walk)
+    const all = await r.episodes()
+    expect(all.roots[0].rows.map((x) => x.id)).toContain(diff.id)
+    expect(all.roots[0].rows.map((x) => x.id)).not.toContain(other.id)
+    expect(all.roots[1].rows.map((x) => x.id)).toContain(other.id)
+  })
+
   test("[MUST-FAIL] a request answered only by its walk lapses at its FIRST deadline; a later deadline does not move it", async () => {
     const r = await fresh()
     const ask = await r.ask("first")

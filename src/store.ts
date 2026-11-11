@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { grades } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -120,8 +120,8 @@ const openRoots = (w: string): Row[] => {
   return arms.slice(-1)
 }
 
-// The rows descended from one root: it, the walk's selections whose pool held it, their hops and failures, and the
-// described rows those selections made.
+// The rows descended from one root: it, the walk's selections whose pool held it, their hops and failures, the
+// described rows those selections made, and the rows the walk recorded from a tool's answer for them (a gitDiff).
 const rootRows = (w: string, root: Row): Row[] => {
   const mine = rows.filter((r) => MINE.has(r.shape)).filter((r) => r.writer === w)
   const held = (r: Row): boolean => [r.pool_refs, r.input_refs].flat().map(String).includes(root.id)
@@ -130,6 +130,7 @@ const rootRows = (w: string, root: Row): Row[] => {
     root,
     ...mine.filter((r) => sels.has(r.shape === SELECTION ? r.id : String(r.selection_ref))),
     ...rows.filter((r) => r.role === DESCRIBED).filter((r) => r.shape !== ACTIVITY_TEMPLATE).filter((r) => sels.has(String(r.selection_ref))),
+    ...rows.filter((r) => r.role === WALK && r.writer === w).filter((r) => !MINE.has(r.shape)).filter((r) => sels.has(String(r.selection_ref))),
   ].map((r) => r.id))
   return rows.filter((r) => keep.has(r.id))
 }
