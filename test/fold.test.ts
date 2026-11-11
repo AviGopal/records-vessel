@@ -132,6 +132,17 @@ describe("posterior fold", () => {
     expect(post([g], "c")).toEqual({ cell: "c", alpha: 1, beta: 1 })
   })
 
+  test("[MUST-FAIL] the walk's grades are tallied: written and counted, answers and lapses apart, and why the rest were refused", () => {
+    const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
+    const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id] })
+    const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id, hop.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
+    const sawHops = grade({ input_refs: [ask.id, answer.id, hop.id] }) // an answer grade that saw the walk's hops: refused
+    const person = verdict({}) // a person's grade: not the walk's own, not tallied
+    const t = F.tally?.([...base, dueSel, due, graderSel, lapse, sawHops, person], seq, seq)
+    expect(t).toEqual({ written: { answer: 1, lapse: 1 }, counted: { answer: 0, lapse: 1 }, refused: { unclean: 1 } })
+  })
+
   test("a row with only a guessed `at` (no within_ms) is not a deadline: no waits are debited", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
     const guessed = row("due", "described", { selection_ref: dueSel.id, at: Date.parse("2026-11-09T11:29:42Z"), input_refs: [ask.id] })
