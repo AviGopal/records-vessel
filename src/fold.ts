@@ -52,10 +52,12 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // A move that failed, as the vessel it called said: a 4xx answer blames the request the move made (a template call
 // naming no channel, a pointer missing its fields). It counts as r 0 for that move's cell only: the selection that made
 // the call, treated, by the walk that wrote the failure; once per selection; never its chain, since it produced nothing.
-// Not counted: 408 and 429 (the callee was busy), 5xx, timeouts and transport errors (an outage is not the move's fault),
+// Not counted: 401 and 403 (they blame the caller's credentials, which rotate, not the request), 408 and 429 (the callee
+// was busy), 5xx, timeouts and transport errors (an outage is not the move's fault),
 // and the walk declining to run or record (kind skip or too_big). Kept apart from grades(): what closes a request and
 // what lapses never read it, and its key cannot replace a grade's.
-const BLAMES_REQUEST = (status: number): boolean => status >= 400 && status < 500 && status !== 408 && status !== 429
+const NOT_THE_REQUEST = new Set([401, 403, 408, 429])
+const BLAMES_REQUEST = (status: number): boolean => status >= 400 && status < 500 && !NOT_THE_REQUEST.has(status)
 export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))

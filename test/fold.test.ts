@@ -154,6 +154,7 @@ describe("a move that failed", () => {
   test("[MUST-FAIL] an outage, a busy callee, the walk declining, or an untreated move does not count", () => {
     for (const f of [
       fail(sel, { status: 503 }), fail(sel, { status: 500 }), fail(sel, { status: 408 }), fail(sel, { status: 429 }),
+      fail(sel, { status: 401 }), fail(sel, { status: 403 }),
       fail(sel, { status: undefined }), fail(sel, { kind: "skip", status: undefined }), fail(sel, { kind: "too_big" }),
       fail(control, {}),
     ]) expect(post([f], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 1 })
