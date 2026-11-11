@@ -256,7 +256,9 @@ export const lastSeq = (): number => seq
 // answer row shares its request (the person row both cite), and no grade the fold counts has judged it yet (one
 // predicate, fold.ts grades): a grade the fold refuses, early or otherwise, does not hide the lapse.
 // The two shapes come from the caller's pointer, so the owner's schema row decides what a deadline and an answer are.
-export const lapsed = (deadlineShape: string, _answerShape: string, now: number): Row[] => {
+// of, when given, names the requests (the person or owner rows) the caller is about: only their deadlines are answered,
+// so a grader of one request is never shown another's lapse.
+export const lapsed = (deadlineShape: string, _answerShape: string, now: number, of?: string[]): Row[] => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const exo = new Set(exogenous(rows).map((r) => r.id))
   const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => exo.has(id))
@@ -272,6 +274,7 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number)
   }
   const out = new Map<string, Row>()
   for (const [ask, r] of first) {
+    if (of !== undefined && !of.includes(ask)) continue
     if (done.has(ask) || judged.has(r.id) || Number(r.at) >= now || byId.get(ask) === undefined) continue
     out.set(r.id, r)
   }

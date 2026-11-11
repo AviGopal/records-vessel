@@ -170,6 +170,17 @@ describe("posterior fold", () => {
     expect(F.grades([...base, due, g], seq, seq).at(-1)).toMatchObject({ ok: false, refused: "judged" })
   })
 
+  test("[MUST-FAIL] a described grade judging another request's row judges nothing, though it was given that row", () => {
+    const other = row("world_changed", "person", { what: "another ask" })
+    const theirs = row("due", "described", { selection_ref: answerSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [other.id] })
+    const mine = row("due", "described", { selection_ref: answerSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const lapseOf = (due: Row) => row("outcome", "described", { r: 0, selection_ref: outcomeSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
+    const [g1, g2] = [lapseOf(theirs), lapseOf(mine)]
+    const gs = F.grades([...base, other, theirs, mine, g1, g2], seq, seq)
+    expect(gs.at(-2)).toMatchObject({ ok: false, refused: "judged" })
+    expect(gs.at(-1)).toMatchObject({ ok: true, deadline: true }) // its own request's lapse still counts (a guard)
+  })
+
   test("[MUST-FAIL] (B) what a grade may judge is read from the owner's newest outcome schema: another described row it saw makes it unclean", () => {
     const wanted = row("change_wanted", "described", { wanted: false, input_refs: [ask.id] })
     const g = grade({ input_refs: [ask.id, answer.id, wanted.id], evidence_refs: [answer.id] })

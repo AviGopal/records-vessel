@@ -59,6 +59,9 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const named = [o.evidence_refs].flat().filter((id) => id !== undefined).map(String)
     const judged = named.length > 0 ? answers.filter((a) => named.includes(String(a?.id))) : answers
     const s = sels.get(String(judged[0]?.selection_ref))
+    // The row a described grade judges must belong to the request it graded: it cites a person or owner row the grade
+    // also saw. A grader shown another request's deadline or answer judges nothing here.
+    const ours = o.role === PERSON || [judged[0]?.input_refs].flat().some((id) => saw.some((r) => r !== undefined && r.id === String(id) && GIVEN.has(r.role)))
     const clean = saw.every((r) => r !== undefined && (GIVEN.has(r.role) || answers.includes(r) || given(r)))
     const r = Number(o.r)
     const j = judged[0]
@@ -69,7 +72,7 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     // clean. (Outcome graders read hops, so without this no lapse counted, and no lapsed request ever closed.)
     const lapse = deadline && r === 0 && timely
     const refused = !(typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1) ? "r"
-      : judged.length !== 1 ? "judged"
+      : judged.length !== 1 || !ours ? "judged"
       : s === undefined || !treated(s.id) || (o.role !== PERSON && !treated(o.selection_ref)) ? "untreated"
       : o.role !== PERSON && !(clean || lapse) ? "unclean"
       : !timely ? "untimely"

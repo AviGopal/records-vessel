@@ -17,6 +17,7 @@ type Pointer = Query & {
   writer?: string
   role?: string
   deadline_shape?: string
+  asks?: unknown
   answer_shape?: string
 }
 type Handler = (p: Pointer, who: Who) => Promise<Response>
@@ -55,7 +56,7 @@ const HANDLERS = new Map<string, Handler>([
     if (p.deadline_shape === undefined || p.answer_shape === undefined) {
       return fail(400, RECORD_LAPSED)
     }
-    return answer(200, lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now()))
+    return answer(200, lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now(), Array.isArray(p.asks) ? p.asks.map(String) : undefined))
   }],
   [POSTERIOR, async (p) => {
     const at = lastSeq()

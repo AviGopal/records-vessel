@@ -45,8 +45,8 @@ const fresh = async () => {
   const episode = async (): Promise<string[]> => ((await call(NODE_KEY, { type: "record_read", episode: WALK })) as Array<{ id: string }>).map((r) => r.id)
   const episodes = async () => (await call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as
     { shared: Array<{ id: string }>; roots: Array<{ root: { id: string }; rows: Array<{ id: string }> }> }
-  const lapsed = async (): Promise<string[]> =>
-    ((await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })) as Array<{ id: string }>).map((r) => r.id)
+  const lapsed = async (more: Record<string, unknown> = {}): Promise<string[]> =>
+    ((await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer", ...more })) as Array<{ id: string }>).map((r) => r.id)
   const ask = (what: string) => write(PERSON_KEY, { shape: "world_changed", what })
   const arm = () => write(NODE_KEY, { shape: "arm", vessel_id: WALK, arm: "treated" }, owner)
   const select = (root: string) => write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", pool_refs: [root], input_refs: [root] }, walk)
@@ -152,6 +152,17 @@ describe("the walk's episode", () => {
     await r.write(NODE_KEY, { shape: "due", within_ms: 3_600_000, selection_ref: sel.id, input_refs: [ask.id] }, desc)
     await Bun.sleep(20)
     expect(await r.lapsed()).toEqual([firstDue.id])
+  })
+
+  test("[MUST-FAIL] a lapsed read naming its requests answers only their deadlines; one naming none answers every request's", async () => {
+    const r = await fresh()
+    const first = await r.ask("first")
+    const second = await r.ask("second")
+    const mine = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: (await r.select(first.id)).id, input_refs: [first.id] }, desc)
+    const theirs = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: (await r.select(second.id)).id, input_refs: [second.id] }, desc)
+    await Bun.sleep(20)
+    expect(await r.lapsed({ asks: [first.id] })).toEqual([mine.id])
+    expect((await r.lapsed()).sort()).toEqual([mine.id, theirs.id].sort())
   })
 
   test("[MUST-FAIL] a failed move never closes a request or hides a lapse", async () => {
