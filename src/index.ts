@@ -37,7 +37,7 @@ const HANDLERS = new Map<string, Handler>([
     return answer(out.status, out.body)
   }],
   [RECORD_READ, async (p) => answer(200, serveRead(p))],
-  [RECORD_WAIT, async (p) => answer(200, await wait(p.shapes, Number(p.after_seq)))],
+  [RECORD_WAIT, async (p) => answer(200, await wait(p.shapes, Number(p.after_seq), p.until === undefined ? undefined : Number(p.until)))],
   [RECORD_WAIT_EXACT, async (p) => answer(200, await waitExact(p.shapes, Number(p.after_seq), p.where))],
   [RECORD_LAPSED, async (p) => {
     if (p.deadline_shape === undefined || p.answer_shape === undefined) {

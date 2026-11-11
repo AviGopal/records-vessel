@@ -171,6 +171,18 @@ describe("records vessel", () => {
     expect(due.at).toBeGreaterThanOrEqual(before + 600_000)
   })
 
+  test("[MUST-FAIL] a wait given until answers null by then when no row comes, and the row when one does", async () => {
+    const quiet = Date.now()
+    const none = await call(NODE_KEY, { type: "record_wait", shapes: ["nothing_writes_this"], after_seq: 1e12, until: Date.now() + 300 })
+    expect(none.status).toBe(200)
+    expect(none.body).toBeNull()
+    expect(Date.now() - quiet).toBeLessThan(5_000)
+    const mark = (await write(NODE_KEY, { shape: "wait_mark" }, { writer: "walk-test", role: "walk" })).body as { seq: number }
+    const pending = call(NODE_KEY, { type: "record_wait", shapes: ["wait_probe"], after_seq: mark.seq, until: Date.now() + 5_000 })
+    await write(NODE_KEY, { shape: "wait_probe" }, { writer: "walk-test", role: "walk" })
+    expect(((await pending).body as { shape: string }).shape).toBe("wait_probe")
+  })
+
   test("registers record_lapsed as a shape it serves", () => {
     const body = discovery.seen.find((s) => s.path === "/register")?.body as { shapes: string[] }
     expect(body.shapes).toContain("record_lapsed")

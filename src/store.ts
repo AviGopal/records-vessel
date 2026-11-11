@@ -143,13 +143,21 @@ const until = async (scan: () => Row[]): Promise<Row> => {
   return until(scan)
 }
 
-export const wait = (shapes: string[], afterSeq: number): Promise<Row> =>
-  until(() => {
+// A wait answers the first row of the shapes asked for (or any exogenous row) after afterSeq. Given a deadline (the
+// caller's `until`, ms since the epoch, taken from its own rows), it answers null at that time: "nothing yet". Without
+// one it waits for a row, as before; nothing here sets a bound of its own.
+export const wait = (shapes: string[], afterSeq: number, deadline?: number): Promise<Row | null> => {
+  const found = until(() => {
     const after = rows.filter((r) => r.seq > afterSeq)
     const want = new Set(shapes)
     const hits = new Set([...after.filter((r) => want.has(r.shape)), ...exogenous(after)].map((r) => r.id))
     return after.filter((r) => hits.has(r.id))
   })
+  if (deadline === undefined || !Number.isFinite(deadline)) {
+    return found
+  }
+  return Promise.race([found, new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(0, deadline - Date.now())))])
+}
 
 export const waitExact = (shapes: string[], afterSeq: number, where: Record<string, unknown> | undefined): Promise<Row> =>
   until(() => {
