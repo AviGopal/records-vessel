@@ -132,6 +132,52 @@ describe("posterior fold", () => {
     expect(post([g], "c")).toEqual({ cell: "c", alpha: 1, beta: 1 })
   })
 
+  // The walk's rows as written: a started hop names the shape called and its kind; the ended hop, under the same call_id,
+  // carries kind and output but no pointer_type.
+  const callHops = (kind: string, id: string) => [
+    row("hop", "walk", { phase: "started", kind, call_id: id, pointer_type: "fs_read", input: { path: "a" } }),
+    row("hop", "walk", { phase: "ended", kind, call_id: id, output: { text: "contents" } }),
+  ]
+  // The owner's outcome schema as the seeder writes it: what a grade may judge, and which hops it is given
+  const toolOutputs = { shape: "hop", where: { phase: "ended", kind: ["call", "run"] } }
+  const outcomeSchema = (context: unknown[]) => row("shape_schema", "owner", { target: "outcome", context })
+
+  test("[MUST-FAIL] (A) a grade that saw only the request, the answer and the ended hops of tool calls the owner gives it counts", () => {
+    const [, ce] = callHops("call", "c1")
+    const [, re] = callHops("run", "r1")
+    const g = grade({ input_refs: [ask.id, answer.id, ce.id, re.id] })
+    expect(post([ce, re, outcomeSchema(["answer", "due", toolOutputs]), g], "c")).toEqual({ cell: "c", ...moved })
+  })
+
+  test("(A) a produce or wait hop, or a call's started hop, still leaves the grade unclean (a guard)", () => {
+    const [cs, ce] = callHops("call", "c2")
+    const schema = outcomeSchema(["answer", "due", toolOutputs])
+    for (const [, other] of [callHops("produce", "p1"), callHops("wait-for", "w1"), [undefined, cs]]) {
+      const g = grade({ input_refs: [ask.id, answer.id, ce.id, other!.id] })
+      expect(post([cs, ce, other!, schema, g], "c")).toEqual({ cell: "c", ...still })
+    }
+  })
+
+  test("(A) a context entry with no where (the schema as seeded before) gives no hop: the same grade stays unclean (a guard)", () => {
+    const [, ce] = callHops("call", "c3")
+    const g = grade({ input_refs: [ask.id, answer.id, ce.id] })
+    expect(post([ce, outcomeSchema(["answer", "due", "hop"]), g], "c")).toEqual({ cell: "c", ...still })
+  })
+
+  test("a grade whose evidence_refs name a deadline row it was not given judges nothing: refused as judged (a pin: the fold never reaches outside input_refs)", () => {
+    const due = row("due", "described", { selection_ref: answerSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const g = row("outcome", "described", { r: 0, selection_ref: outcomeSel.id, input_refs: [ask.id, answer.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
+    expect(F.grades([...base, due, g], seq, seq).at(-1)).toMatchObject({ ok: false, refused: "judged" })
+  })
+
+  test("[MUST-FAIL] (B) what a grade may judge is read from the owner's newest outcome schema: another described row it saw makes it unclean", () => {
+    const wanted = row("change_wanted", "described", { wanted: false, input_refs: [ask.id] })
+    const g = grade({ input_refs: [ask.id, answer.id, wanted.id], evidence_refs: [answer.id] })
+    expect(post([wanted, outcomeSchema(["world_changed", "answer", "due"]), g], "c")).toEqual({ cell: "c", ...still })
+    // the newest schema row is the one read: one naming change_wanted as context lets the same grade count (a guard)
+    expect(post([wanted, outcomeSchema(["world_changed", "answer", "due"]), outcomeSchema(["answer", "change_wanted"]), g], "c")).toEqual({ cell: "c", ...moved })
+  })
+
   test("[MUST-FAIL] the walk's grades are tallied: written and counted, answers and lapses apart, and why the rest were refused", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
     const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })

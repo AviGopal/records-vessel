@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { DESCRIBED, FAILURE, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, TREATED, WALK } from "./shapes"
+import { DESCRIBED, FAILURE, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -34,13 +34,32 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // of an answer counts: a repeat replaces, never adds. A judged row that carries a deadline (within_ms, which records
   // made into `at`) lapsed rather than answered: its grade counts only as r 0 and only when records stamped the grade after the deadline, and it also
   // credits the treated steps the grader's selection held after that row, which are the waits that let it lapse.
+  // What a grade may see is the owner's to say, in its newest outcome schema row's context. An entry there is a shape,
+  // or {shape, where}: rows of that shape whose fields hold where's values (a list: any of them).
+  //  - What a grade may be judging: a described row of a shape the context names (an answer, a deadline), never another
+  //    described row it happened to see (a request, a judgment of the ask). With no such row, any described row that is
+  //    not a grade, as before.
+  //  - A row a where entry names (what a tool call returned, in its ended hop) is given evidence: the owner chose it, and
+  //    the walk did not author it. Seeing it leaves a grade clean; a row of the walk's no where entry names (a produce
+  //    or wait hop, a started hop, a selection) does not.
+  const outcomeSchema = seen.filter((r) => r.shape === SHAPE_SCHEMA && r.role === OWNER && String(r.target) === OUTCOME && !r.variant)
+    .sort((a, b) => a.seq - b.seq).at(-1)
+  const entries: unknown[] | undefined = outcomeSchema ? [outcomeSchema.context ?? []].flat() : undefined
+  const matches = (r: Row, e: unknown): boolean => {
+    if (typeof e === "string") return r.shape === e
+    if (typeof e !== "object" || e === null) return false
+    const { shape, where } = e as { shape?: unknown; where?: Record<string, unknown> }
+    return r.shape === String(shape) && Object.entries(where ?? {}).every(([k, v]) => Array.isArray(v) ? v.includes(r[k]) : r[k] === v)
+  }
+  const gradable = (r: Row): boolean => entries === undefined || entries.some((e) => matches(r, e))
+  const given = (r: Row): boolean => (entries ?? []).some((e) => typeof e === "object" && e !== null && "where" in e && matches(r, e))
   const credit = (o: Row): Grade => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
-    const answers = saw.filter((r) => r !== undefined && r.role === DESCRIBED && r.shape !== OUTCOME)
+    const answers = saw.filter((r) => r !== undefined && r.role === DESCRIBED && r.shape !== OUTCOME && gradable(r))
     const named = [o.evidence_refs].flat().filter((id) => id !== undefined).map(String)
     const judged = named.length > 0 ? answers.filter((a) => named.includes(String(a?.id))) : answers
     const s = sels.get(String(judged[0]?.selection_ref))
-    const clean = saw.every((r) => r !== undefined && (GIVEN.has(r.role) || answers.includes(r)))
+    const clean = saw.every((r) => r !== undefined && (GIVEN.has(r.role) || answers.includes(r) || given(r)))
     const r = Number(o.r)
     const j = judged[0]
     const deadline = j !== undefined && typeof j.within_ms === "number" && typeof j.at === "number"
