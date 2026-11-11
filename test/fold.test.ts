@@ -137,3 +137,30 @@ describe("posterior fold", () => {
     expect(post([prior, verdict({ r: 0 })], "c")).toEqual({ cell: "c", alpha: 3, beta: 6 })
   })
 })
+
+describe("a move that failed", () => {
+  const sel = row("selection", "walk", { arm: "treated", cell: "run/t1", pool_refs: [] })
+  const earlier = row("selection", "walk", { arm: "treated", cell: "step2" })
+  const chained = row("selection", "walk", { arm: "treated", cell: "run/t2", pool_refs: [earlier.id] })
+  const control = row("selection", "walk", { arm: "control", cell: "run/t1" })
+  const fail = (s: Row, fields: Record<string, unknown>) => row("failure", "walk", { selection_ref: s.id, status: 422, body: "x", ...fields })
+  const post = (rows: Row[], cell: string) => fold([sel, earlier, chained, control, ...rows], [cell], seq, seq)[0]
+
+  test("[MUST-FAIL] a 4xx the called vessel answered lowers the move's own cell, once per selection", () => {
+    expect(post([fail(sel, {})], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 2 })
+    expect(post([fail(sel, {}), fail(sel, { status: 400 })], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 2 })
+  })
+
+  test("[MUST-FAIL] an outage, a busy callee, the walk declining, or an untreated move does not count", () => {
+    for (const f of [
+      fail(sel, { status: 503 }), fail(sel, { status: 500 }), fail(sel, { status: 408 }), fail(sel, { status: 429 }),
+      fail(sel, { status: undefined }), fail(sel, { kind: "skip", status: undefined }), fail(sel, { kind: "too_big" }),
+      fail(control, {}),
+    ]) expect(post([f], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 1 })
+  })
+
+  test("[MUST-FAIL] a failure credits no chain: the steps before it are untouched", () => {
+    expect(post([fail(chained, {})], "run/t2")).toEqual({ cell: "run/t2", alpha: 1, beta: 2 })
+    expect(post([fail(chained, {})], "step2")).toEqual({ cell: "step2", alpha: 1, beta: 1 })
+  })
+})

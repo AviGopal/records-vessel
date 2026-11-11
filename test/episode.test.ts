@@ -154,6 +154,17 @@ describe("the walk's episode", () => {
     expect(await r.lapsed()).toEqual([firstDue.id])
   })
 
+  test("[MUST-FAIL] a failed move never closes a request or hides a lapse", async () => {
+    const r = await fresh()
+    const ask = await r.ask("first")
+    const sel = await r.select(ask.id)
+    const due = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await r.write(NODE_KEY, { shape: "failure", status: 422, body: "x", selection_ref: sel.id, input_refs: [ask.id, due.id] }, walk)
+    await Bun.sleep(20)
+    expect(await r.lapsed()).toEqual([due.id])
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toContain(ask.id)
+  })
+
   test("a person's verdict before the first deadline ends the request: nothing lapses", async () => {
     const r = await fresh()
     const ask = await r.ask("first")

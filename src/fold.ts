@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { DESCRIBED, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, TREATED } from "./shapes"
+import { DESCRIBED, FAILURE, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -49,9 +49,29 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     .map(credit)
 }
 
+// A move that failed, as the vessel it called said: a 4xx answer blames the request the move made (a template call
+// naming no channel, a pointer missing its fields). It counts as r 0 for that move's cell only: the selection that made
+// the call, treated, by the walk that wrote the failure; once per selection; never its chain, since it produced nothing.
+// Not counted: 408 and 429 (the callee was busy), 5xx, timeouts and transport errors (an outage is not the move's fault),
+// and the walk declining to run or record (kind skip or too_big). Kept apart from grades(): what closes a request and
+// what lapses never read it, and its key cannot replace a grade's.
+const BLAMES_REQUEST = (status: number): boolean => status >= 400 && status < 500 && status !== 408 && status !== 429
+export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const out = new Map<string, Grade>()
+  for (const f of seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.seq <= asOf)) {
+    const s = sels.get(String(f.selection_ref))
+    if (s === undefined || String(s.arm) !== TREATED || s.writer !== f.writer) continue
+    if (f.kind !== undefined || typeof f.status !== "number" || !BLAMES_REQUEST(f.status)) continue
+    out.set(s.id, { ok: true, r: 0, judged: s.id, key: `fail|${s.id}`, cells: new Set([String(s.cell)]), by: WALK, deadline: false })
+  }
+  return [...out.values()]
+}
+
 export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
-  const latest = new Map(grades(all, asOf, atSeq).filter((k) => k.ok).map((k) => [k.key, k]))
+  const latest = new Map([...grades(all, asOf, atSeq).filter((k) => k.ok), ...moveFailures(all, asOf, atSeq)].map((k) => [k.key, k]))
   return cells.map((c) => {
     const counted = [...latest.values()].filter((k) => k.cells.has(c))
     const p0 = priors
