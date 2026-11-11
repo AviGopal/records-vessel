@@ -132,38 +132,45 @@ export const episode = (w: string): Row[] => {
   return rows.filter((r) => keep.has(r.id))
 }
 
-const until = async (scan: () => Row[]): Promise<Row> => {
-  const hits = scan()
-  if (hits.length > 0) {
-    return hits[0]
-  }
-  await new Promise<void>((resolve) => {
-    wakers.push(resolve)
+// Answers the first row scan finds, rescanning on every write. Given a deadline it answers null at that time and
+// withdraws its waker, so a wait that ended empty stops rescanning: one left behind per timed-out wait would rescan
+// every row on every later write, forever.
+const until = (scan: () => Row[], deadline?: number): Promise<Row | null> =>
+  new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const done = (row: Row | null): void => {
+      clearTimeout(timer)
+      wakers = wakers.filter((w) => w !== waker)
+      resolve(row)
+    }
+    const waker = (): void => {
+      const hits = scan()
+      if (hits.length > 0) done(hits[0])
+      else wakers.push(waker)
+    }
+    waker()
+    if (deadline !== undefined && Number.isFinite(deadline)) timer = setTimeout(() => done(null), Math.max(0, deadline - Date.now()))
   })
-  return until(scan)
-}
+
+/** How many waits are registered: a wait that answered, by a row or by its deadline, is not among them. */
+export const waiting = (): number => wakers.length
 
 // A wait answers the first row of the shapes asked for (or any exogenous row) after afterSeq. Given a deadline (the
 // caller's `until`, ms since the epoch, taken from its own rows), it answers null at that time: "nothing yet". Without
 // one it waits for a row, as before; nothing here sets a bound of its own.
-export const wait = (shapes: string[], afterSeq: number, deadline?: number): Promise<Row | null> => {
-  const found = until(() => {
+export const wait = (shapes: string[], afterSeq: number, deadline?: number): Promise<Row | null> =>
+  until(() => {
     const after = rows.filter((r) => r.seq > afterSeq)
     const want = new Set(shapes)
     const hits = new Set([...after.filter((r) => want.has(r.shape)), ...exogenous(after)].map((r) => r.id))
     return after.filter((r) => hits.has(r.id))
-  })
-  if (deadline === undefined || !Number.isFinite(deadline)) {
-    return found
-  }
-  return Promise.race([found, new Promise<null>((resolve) => setTimeout(() => resolve(null), Math.max(0, deadline - Date.now())))])
-}
+  }, deadline)
 
 export const waitExact = (shapes: string[], afterSeq: number, where: Record<string, unknown> | undefined): Promise<Row> =>
   until(() => {
     const want = new Set(shapes)
     return read({ after_seq: afterSeq, where }).filter((r) => want.has(r.shape))
-  })
+  }) as Promise<Row> // no deadline: it answers a row
 
 export const lastSeq = (): number => seq
 
