@@ -50,7 +50,7 @@ const fresh = async () => {
   const ask = (what: string) => write(PERSON_KEY, { shape: "world_changed", what })
   const arm = () => write(NODE_KEY, { shape: "arm", vessel_id: WALK, arm: "treated" }, owner)
   const select = (root: string) => write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", pool_refs: [root], input_refs: [root] }, walk)
-  return { write, episode, episodes, lapsed, ask, arm, select }
+  return { write, episode, episodes, lapsed, ask, arm, select, call }
 }
 
 describe("the walk's episode", () => {
@@ -176,14 +176,81 @@ describe("the walk's episode", () => {
     expect(await r.lapsed()).toEqual([])
   })
 
-  test("[MUST-FAIL] the owner's description of a shape is configuration, not a request; a detector's gap row is neither", async () => {
+  test("[MUST-FAIL] the owner's description of a shape is configuration, not a request", async () => {
     const r = await fresh()
     await r.arm()
     await r.write(NODE_KEY, { shape: "shape_description", of: "gap", description: "what a gap row is" }, owner)
-    await r.write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "open", summary: "a check fails" }, { writer: "pull-sync", role: "detector" })
     const all = await r.episodes()
     expect(all.roots.map((x) => x.root.shape)).toEqual(["arm"]) // idle: nothing to work
     expect((await r.write(PERSON_KEY, { shape: "shape_description", of: "x" })).failure?.status).toBe(403) // owner rows only
+  })
+
+  const detector = { writer: "pull-sync", role: "detector" }
+  const gap = (r: Awaited<ReturnType<typeof fresh>>, id: string, status: string) =>
+    r.write(NODE_KEY, { shape: "gap", gap_id: id, status, summary: "a check fails" }, detector)
+
+  test("[MUST-FAIL] a gap a detector opened is work: a root, with only its own rows", async () => {
+    const r = await fresh()
+    await r.arm()
+    const g = await gap(r, "g1", "open")
+    const sel = await r.select(g.id)
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([g.id]) // not idle on the arm
+    expect(all.roots[0].rows.map((x) => x.id)).toEqual([g.id, sel.id])
+  })
+
+  test("[MUST-FAIL] a person's ask and an open gap are both roots, oldest first, each with its own work", async () => {
+    const r = await fresh()
+    await r.arm()
+    const g = await gap(r, "g1", "open")
+    const a = await r.ask("hello")
+    const onAsk = await r.select(a.id)
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([g.id, a.id])
+    expect(all.roots[0].rows.map((x) => x.id)).not.toContain(onAsk.id)
+    expect(all.roots[1].rows.map((x) => x.id)).toContain(onAsk.id)
+  })
+
+  test("a later detector row that is not open closes the gap: the walk idles again (a pin; the parent never opened it)", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    await gap(r, "g1", "open")
+    await gap(r, "g1", "closed")
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([arm.id])
+  })
+
+  test("a closed row anyone but a detector writes closes nothing; a gap row not a detector's is no root (a guard)", async () => {
+    const r = await fresh()
+    await r.arm()
+    const g = await gap(r, "g1", "open")
+    const notClosing = await r.write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "closed" }, walk)
+    const notOpening = await r.write(NODE_KEY, { shape: "gap", gap_id: "g2", status: "open" }, walk)
+    const roots = (await r.episodes()).roots.map((x) => x.root.id)
+    expect(roots).not.toContain(notClosing.id)
+    expect(roots).not.toContain(notOpening.id)
+    expect(roots.includes(g.id) || roots.length === 1).toBe(true)
+  })
+
+  test("[MUST-FAIL] a wait is answered by a detector's row closing a gap, so a walk waiting on that gap sees it end", async () => {
+    const r = await fresh()
+    await r.arm()
+    const g = await gap(r, "g1", "open")
+    const waiting = r.call(NODE_KEY, { type: "record_wait", shapes: [], after_seq: g.seq })
+    await Bun.sleep(50)
+    const closing = await gap(r, "g1", "closed")
+    const got = await Promise.race([waiting, Bun.sleep(3000).then(() => null)])
+    expect(got?.id).toBe(closing.id)
+  })
+
+  test("[MUST-FAIL] a wait is answered by a gap a detector opens, as by a person's ask", async () => {
+    const r = await fresh()
+    await r.arm()
+    const waiting = r.call(NODE_KEY, { type: "record_wait", shapes: [], after_seq: 1 })
+    await Bun.sleep(50)
+    const g = await gap(r, "g1", "open")
+    const got = await Promise.race([waiting, Bun.sleep(3000).then(() => null)])
+    expect(got?.id).toBe(g.id)
   })
 
   test("with no request open, the walk idles on its arm, as before", async () => {

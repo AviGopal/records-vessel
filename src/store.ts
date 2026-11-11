@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { grades } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -112,9 +112,19 @@ const closed = (): Set<string> => {
 // arm row, as it idles. It holds the rows descended from that root: the walk's selections whose pool held it, their
 // hops and failures, the described rows those selections made, and the owner's channels, schemas and the walk's
 // templates. A newer request's work is not in an older root's episode.
+// A gap a detector found is work too, though no one asked: while the latest detector row for its gap_id says open, that
+// row is a root, worked as a request is. Only a detector closes it (a later row of the same gap_id that is not open: its
+// check passed), never a grade or anything the walk writes, so the gap stays work until the check says it is fixed.
+const openGaps = (from: Row[]): Row[] => {
+  const latest = new Map<string, Row>()
+  for (const r of from.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined)) latest.set(String(r.gap_id), r)
+  return [...latest.values()].filter((r) => r.status === "open")
+}
+
 const openRoots = (w: string): Row[] => {
   const done = closed()
-  const open = exogenous(rows).filter((r) => r.shape !== OUTCOME).filter((r) => !done.has(r.id))
+  const open = [...exogenous(rows).filter((r) => r.shape !== OUTCOME).filter((r) => !done.has(r.id)), ...openGaps(rows)]
+    .sort((a, b) => a.seq - b.seq)
   if (open.length > 0) return open
   const arms = rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w)
   return arms.slice(-1)
@@ -177,14 +187,16 @@ const until = (scan: () => Row[], deadline?: number): Promise<Row | null> =>
 /** How many waits are registered: a wait that answered, by a row or by its deadline, is not among them. */
 export const waiting = (): number => wakers.length
 
-// A wait answers the first row of the shapes asked for (or any exogenous row) after afterSeq. Given a deadline (the
+// A wait answers the first row of the shapes asked for (or any exogenous row, or a detector's gap row, opening or closing
+// one: either changes what the walk has to work) after afterSeq. Given a deadline (the
 // caller's `until`, ms since the epoch, taken from its own rows), it answers null at that time: "nothing yet". Without
 // one it waits for a row, as before; nothing here sets a bound of its own.
 export const wait = (shapes: string[], afterSeq: number, deadline?: number): Promise<Row | null> =>
   until(() => {
     const after = rows.filter((r) => r.seq > afterSeq)
     const want = new Set(shapes)
-    const hits = new Set([...after.filter((r) => want.has(r.shape)), ...exogenous(after)].map((r) => r.id))
+    const gaps = after.filter((r) => r.shape === GAP && r.role === DETECTOR)
+    const hits = new Set([...after.filter((r) => want.has(r.shape)), ...exogenous(after), ...gaps].map((r) => r.id))
     return after.filter((r) => hits.has(r.id))
   }, deadline)
 

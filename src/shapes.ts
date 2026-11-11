@@ -18,6 +18,8 @@ export const SHAPE_SCHEMA = "shape_schema"
 export const SHAPE_DESCRIPTION = "shape_description"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
+// Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.
+export const DETECTOR = "detector"
 export const ARM = "arm"
 export const AUTHENTICATION = "authentication"
 export const WALK = "walk"
