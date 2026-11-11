@@ -145,12 +145,42 @@ const rootRows = (w: string, root: Row): Row[] => {
   return rows.filter((r) => keep.has(r.id))
 }
 
-// What every root's work shares: the owner's channels and schemas, and the walk's templates.
+// A template is earned, not declared (law 4): it is the walk's to run only when it replays a run that reached. Its own
+// selection worked a request a person graded done (r 1, the grade that closes a request), and every call it lists, in
+// order, is a call that ended in that request's work (a call or a template's call whose hop ended; the shape it called
+// is on the started hop of the same call_id). A template a producer declared from anything else, a failed run or an
+// ask still open, or one calling what the run never called, is not offered: it stays in the store, unread by the walk.
+const earned = (w: string): (t: Row) => boolean => {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const done = new Set(grades(rows, seq, seq).filter((k) => k.ok && k.r === 1 && k.by === PERSON)
+    .flatMap((k) => [byId.get(k.judged)?.input_refs].flat().map(String)))
+  const sels = rows.filter((r) => r.shape === SELECTION && r.writer === w)
+  const started = new Map(rows.filter((r) => r.shape === HOP && r.writer === w && r.phase === "started").map((r) => [String(r.call_id), String(r.pointer_type)]))
+  const calledIn = (root: string): string[] => {
+    const held = new Set(sels.filter((s) => [s.pool_refs].flat().map(String).includes(root)).map((s) => s.id))
+    return rows
+      .filter((r) => r.shape === HOP && r.writer === w && r.phase === "ended" && (r.kind === "call" || r.kind === "run") && held.has(String(r.selection_ref)))
+      .map((r) => started.get(String(r.call_id)) ?? "")
+  }
+  const replays = (calls: string[], ran: string[]): boolean => {
+    let i = 0
+    for (const shape of ran) if (i < calls.length && shape === calls[i]) i++
+    return calls.length > 0 && i === calls.length
+  }
+  return (t: Row): boolean => {
+    const own = byId.get(String(t.selection_ref))
+    const calls = [t.calls].flat().map((c) => String((c as { shape?: unknown } | undefined)?.shape ?? ""))
+    return [own?.pool_refs].flat().map(String).filter((id) => done.has(id)).some((root) => replays(calls, calledIn(root)))
+  }
+}
+
+// What every root's work shares: the owner's channels and schemas, and the templates the walk earned.
 const shared = (w: string): Row[] => {
   const allSels = new Set(rows.filter((r) => r.shape === SELECTION).filter((r) => r.writer === w).map((r) => r.id))
+  const ok = earned(w)
   return rows.filter((r) =>
     (r.role === OWNER && (r.shape === CHANNEL || r.shape === SHAPE_SCHEMA)) ||
-    (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref))))
+    (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) && ok(r)))
 }
 
 export const episode = (w: string): Row[] => {

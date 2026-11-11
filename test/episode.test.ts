@@ -253,6 +253,65 @@ describe("the walk's episode", () => {
     expect(got?.id).toBe(g.id)
   })
 
+  // A run that reached: the ask, a call that ended in its work, an answer, and a person's verdict on it.
+  const reached = async (r: Awaited<ReturnType<typeof fresh>>, verdict: number | null) => {
+    await r.arm()
+    const a = await r.ask("make the change")
+    const sel = await r.select(a.id)
+    await r.write(NODE_KEY, { shape: "hop", call_id: "c1", phase: "started", kind: "call", pointer_type: "git_worktree", selection_ref: sel.id, input_refs: [sel.id] }, walk)
+    await r.write(NODE_KEY, { shape: "hop", call_id: "c1", phase: "ended", kind: "call", selection_ref: sel.id, input_refs: [sel.id] }, walk)
+    await r.write(NODE_KEY, { shape: "hop", call_id: "c2", phase: "started", kind: "call", pointer_type: "git_commit", selection_ref: sel.id, input_refs: [sel.id] }, walk)
+    await r.write(NODE_KEY, { shape: "hop", call_id: "c2", phase: "ended", kind: "call", selection_ref: sel.id, input_refs: [sel.id] }, walk)
+    const answerSel = await r.select(a.id)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "done", selection_ref: answerSel.id, input_refs: [a.id] }, desc)
+    if (verdict !== null) await r.write(PERSON_KEY, { shape: "outcome", r: verdict, input_refs: [answer.id] })
+    const template = async (calls: string[], root = a.id) => {
+      const tSel = await r.select(root)
+      return r.write(NODE_KEY, { shape: "activity_template", sig: { in: ["world_changed"], out: ["answer"] }, calls: calls.map((shape) => ({ shape, pointer: {} })), selection_ref: tSel.id, input_refs: [root] }, desc)
+    }
+    return { a, template }
+  }
+  const sharedIds = async (r: Awaited<ReturnType<typeof fresh>>) => (await r.episodes()).shared.map((x) => x.id)
+
+  test("a template that replays, in order, calls that ended in a request a person graded done is the walk's to run (a guard)", async () => {
+    const r = await fresh()
+    const run = await reached(r, 1)
+    const whole = await run.template(["git_worktree", "git_commit"])
+    const part = await run.template(["git_commit"])
+    const ids = await sharedIds(r)
+    expect(ids).toContain(whole.id)
+    expect(ids).toContain(part.id)
+  })
+
+  test("[MUST-FAIL] a template declared from a request no person graded done, or graded r 0, is not offered", async () => {
+    for (const verdict of [null, 0]) {
+      const r = await fresh()
+      const run = await reached(r, verdict)
+      const t = await run.template(["git_worktree", "git_commit"])
+      expect(await sharedIds(r)).not.toContain(t.id)
+      stop()
+    }
+  })
+
+  test("[MUST-FAIL] a template calling what the run never called, or in another order, or nothing, is not offered", async () => {
+    const r = await fresh()
+    const run = await reached(r, 1)
+    const never = await run.template(["hop"])
+    const extra = await run.template(["git_worktree", "fs_edit", "git_commit"])
+    const swapped = await run.template(["git_commit", "git_worktree"])
+    const empty = await run.template([])
+    const ids = await sharedIds(r)
+    for (const t of [never, extra, swapped, empty]) expect(ids).not.toContain(t.id)
+  })
+
+  test("[MUST-FAIL] a template whose own selection worked another request is not earned by this one's verdict", async () => {
+    const r = await fresh()
+    const run = await reached(r, 1)
+    const other = await r.ask("something else")
+    const t = await run.template(["git_worktree"], other.id)
+    expect(await sharedIds(r)).not.toContain(t.id)
+  })
+
   test("with no request open, the walk idles on its arm, as before", async () => {
     const r = await fresh()
     const arm = await r.arm()
