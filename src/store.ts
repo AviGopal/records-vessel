@@ -115,13 +115,16 @@ const closed = (): Set<string> => {
 // arm row, as it idles. It holds the rows descended from that root: the walk's selections whose pool held it, their
 // hops and failures, the described rows those selections made, and the owner's channels, schemas and the walk's
 // templates. A newer request's work is not in an older root's episode.
-// A gap a detector found is work too, though no one asked: while the latest detector row for its gap_id says open, that
-// row is a root, worked as a request is. Only a detector closes it (a later row of the same gap_id that is not open: its
+// A gap a detector found is work too, though no one asked: while the latest detector row for its gap_id says open (and
+// no hold is on it), that row is a root, worked as a request is. Only a detector closes it (a later row of the same gap_id that is not open: its
 // check passed), never a grade or anything the walk writes, so the gap stays work until the check says it is fixed.
 const openGaps = (from: Row[]): Row[] => {
   const latest = new Map<string, Row>()
   for (const r of from.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined)) latest.set(String(r.gap_id), r)
-  return [...latest.values()].filter((r) => r.status === "open")
+  // A gap held by a person (operator_hold on its latest row, kept in its meta by the detector) is no one's work until
+  // the hold lifts: it is not a root.
+  const held = (r: Row): boolean => r.operator_hold === true || (r.meta as { operator_hold?: unknown } | undefined)?.operator_hold === true
+  return [...latest.values()].filter((r) => r.status === "open" && !held(r))
 }
 
 const openRoots = (w: string): Row[] => {
