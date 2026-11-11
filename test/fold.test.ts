@@ -117,6 +117,21 @@ describe("posterior fold", () => {
     expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", ...still })
   })
 
+  test("[MUST-FAIL] a lapse counts even when its grader also saw the walk's hops: a deadline passing is a fact, not a judgment", () => {
+    const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id, stepSel.id] })
+    const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id] })
+    const lapse = row("outcome", "described", {
+      r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id, hop.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z",
+    })
+    expect(fold([...base, dueSel, due, graderSel, lapse], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
+  })
+
+  test("a grade of an answer that saw the walk's hops still does not count (a guard: only a lapse is exempt)", () => {
+    const g = grade({ input_refs: [ask.id, answer.id, hop.id] })
+    expect(post([g], "c")).toEqual({ cell: "c", alpha: 1, beta: 1 })
+  })
+
   test("a row with only a guessed `at` (no within_ms) is not a deadline: no waits are debited", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
     const guessed = row("due", "described", { selection_ref: dueSel.id, at: Date.parse("2026-11-09T11:29:42Z"), input_refs: [ask.id] })

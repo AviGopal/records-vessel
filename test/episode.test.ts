@@ -374,6 +374,19 @@ describe("the walk's episode", () => {
     ]).toEqual(["request", "request", "request", "callee", "callee", "callee", "callee", "walk"])
   })
 
+  test("[MUST-FAIL] a request whose deadline lapsed is closed by the lapse grade, even when the grader also saw the walk's hops", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const a = await r.ask("what is the time")
+    const sel = await r.select(a.id)
+    const due = await r.write(NODE_KEY, { shape: "due", within_ms: 0, selection_ref: sel.id, input_refs: [a.id] }, desc)
+    const h = await r.write(NODE_KEY, { shape: "hop", call_id: "c1", phase: "ended", kind: "call", selection_ref: sel.id, input_refs: [sel.id] }, walk)
+    await Bun.sleep(5)
+    const gSel = await r.select(a.id)
+    await r.write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: gSel.id, input_refs: [a.id, due.id, h.id], evidence_refs: [due.id] }, desc)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
+  })
+
   test("with no request open, the walk idles on its arm, as before", async () => {
     const r = await fresh()
     const arm = await r.arm()

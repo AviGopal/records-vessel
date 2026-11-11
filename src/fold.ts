@@ -44,7 +44,11 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const j = judged[0]
     const deadline = j !== undefined && typeof j.within_ms === "number" && typeof j.at === "number"
     const timely = !deadline || (r === 0 && Date.parse(String(o.t)) >= Number(j?.at))
-    const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref))) && timely
+    // A lapse (r 0 on a deadline row, stamped after it) is a fact about the clock, not a judgment of the walk's work: what
+    // else the grader saw cannot make it less independent, so it counts clean or not. A grade of an answer still must be
+    // clean. (Outcome graders read hops, so without this no lapse counted, and no lapsed request ever closed.)
+    const lapse = deadline && r === 0 && timely
+    const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || ((clean || lapse) && treated(o.selection_ref))) && timely
     const after = deadline ? [sels.get(String(o.selection_ref))?.pool_refs].flat().map((id) => sels.get(String(id))).filter((x) => x !== undefined && x.seq > Number(j?.seq)) : []
     const chain = ok ? [s, ...[s.pool_refs].flat().map((id) => sels.get(String(id))), ...after] : []
     return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id) && !failed.has(x.id)).map((x) => String(x?.cell))), by: String(o.role), deadline }
