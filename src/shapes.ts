@@ -13,6 +13,9 @@ export const OUTCOME = "outcome"
 export const PRIOR = "prior"
 export const CHANNEL = "channel"
 export const SHAPE_SCHEMA = "shape_schema"
+// The owner's description of a shape that something other than a producer writes (a detector's gap): configuration, read
+// by whoever reads that shape, never work for the walk.
+export const SHAPE_DESCRIPTION = "shape_description"
 export const ARM = "arm"
 export const AUTHENTICATION = "authentication"
 export const WALK = "walk"

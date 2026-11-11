@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { grades } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -18,7 +18,7 @@ export type Query = {
   roots?: string
 }
 
-const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, ARM, PRIOR])
+const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR])
 const EXO_ROLES = new Set([PERSON, OWNER])
 const MINE = new Set([SELECTION, HOP, FAILURE])
 const FILE = join(DATA_DIR, "rows")

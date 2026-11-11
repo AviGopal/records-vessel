@@ -176,6 +176,16 @@ describe("the walk's episode", () => {
     expect(await r.lapsed()).toEqual([])
   })
 
+  test("[MUST-FAIL] the owner's description of a shape is configuration, not a request; a detector's gap row is neither", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, { shape: "shape_description", of: "gap", description: "what a gap row is" }, owner)
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "open", summary: "a check fails" }, { writer: "pull-sync", role: "detector" })
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.shape)).toEqual(["arm"]) // idle: nothing to work
+    expect((await r.write(PERSON_KEY, { shape: "shape_description", of: "x" })).failure?.status).toBe(403) // owner rows only
+  })
+
   test("with no request open, the walk idles on its arm, as before", async () => {
     const r = await fresh()
     const arm = await r.arm()

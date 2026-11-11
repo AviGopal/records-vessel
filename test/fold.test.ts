@@ -165,3 +165,12 @@ describe("a move that failed", () => {
     expect(post([fail(chained, {})], "step2")).toEqual({ cell: "step2", alpha: 1, beta: 1 })
   })
 })
+
+describe("a detector's gap row", () => {
+  test("[MUST-FAIL] never counts as a grade or a move's failure", () => {
+    const sel = row("selection", "walk", { arm: "treated", cell: "x" })
+    const gap = row("gap", "detector", { gap_id: "g1", status: "open", r: 0, selection_ref: sel.id, status_code: 422 })
+    const closed = row("gap", "detector", { gap_id: "g1", status: "closed", r: 1, input_refs: [sel.id] })
+    expect(fold([sel, gap, closed], ["x"], seq, seq)[0]).toEqual({ cell: "x", alpha: 1, beta: 1 })
+  })
+})
