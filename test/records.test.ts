@@ -91,6 +91,15 @@ describe("records vessel", () => {
     expect(r.body.role).toBe("person")
   })
 
+  test("[MUST-FAIL] the node key cannot write a person row: a person row is only ever stamped from a person's key", async () => {
+    const forged = await write(NODE_KEY, { shape: "outcome", r: 1 }, { writer: "kid-person", role: "person" })
+    expect(forged.status).toBe(403)
+    const real = await write(PERSON_KEY, { shape: "outcome", r: 1 })
+    expect(real.status).toBe(200)
+    expect(real.body.role).toBe("person")
+    expect(real.body.writer).toBe("kid-person")
+  })
+
   test("a key identity rejects gets 401", async () => {
     expect((await write("not-a-key", { shape: "note" })).status).toBe(401)
   })

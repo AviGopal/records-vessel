@@ -33,6 +33,12 @@ const HANDLERS = new Map<string, Handler>([
     if (p.writer === undefined || p.role === undefined) {
       return fail(400, RECORD_WRITE)
     }
+    // A person row is one identity stamped from the person's own key, above. The node key is held by every vessel on
+    // the node, so a person row declared under it could be anyone's, and a verdict that only a person may give
+    // (closing a request, approving a landing) could be forged.
+    if (String(p.role) === PERSON) {
+      return fail(403, "a person row is written only under the person's own key")
+    }
     const out = write(p.row, String(p.writer), String(p.role))
     return answer(out.status, out.body)
   }],
