@@ -18,6 +18,13 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const treated = (id: unknown): boolean => String(sels.get(String(id))?.arm) === TREATED
+  // A selection whose move failed (a failure row the walk that made it wrote, whatever the status or kind) produced
+  // nothing a grade can be crediting, so it is left out of every chain. A skip row is not such a failure: it names a
+  // template that could not run, and cites whichever selection the walk was making then, not a move of its own.
+  const failed = new Set(seen
+    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+    .filter((r) => sels.get(String(r.selection_ref))?.writer === r.writer)
+    .map((r) => String(r.selection_ref)))
   // A grade (a person's verdict or a described outcome) judges one answer it saw (any described row that is not a grade,
   // so a due row is answer-like: grading it r 1 credits the steps that made it): the answer in its input_refs, or, when
   // it saw several, the one its evidence_refs names. It credits the composition that made that answer: the answer's
@@ -40,7 +47,7 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref))) && timely
     const after = deadline ? [sels.get(String(o.selection_ref))?.pool_refs].flat().map((id) => sels.get(String(id))).filter((x) => x !== undefined && x.seq > Number(j?.seq)) : []
     const chain = ok ? [s, ...[s.pool_refs].flat().map((id) => sels.get(String(id))), ...after] : []
-    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id)).map((x) => String(x?.cell))), by: String(o.role), deadline }
+    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id) && !failed.has(x.id)).map((x) => String(x?.cell))), by: String(o.role), deadline }
   }
   return seen
     .filter((r) => r.shape === OUTCOME)

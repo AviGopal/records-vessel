@@ -166,6 +166,54 @@ describe("a move that failed", () => {
   })
 })
 
+describe("a step whose move failed", () => {
+  const ask = row("world_changed", "person", { what: "q" })
+  const okStep = row("selection", "walk", { arm: "treated", cell: "ok-step" })
+  const badStep = row("selection", "walk", { arm: "treated", cell: "bad-step" })
+  const answerSel = row("selection", "walk", { arm: "treated", cell: "answer-cell", pool_refs: [ask.id, okStep.id, badStep.id] })
+  const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id] })
+  const verdict = (r: number) => row("outcome", "person", { r, input_refs: [answer.id] })
+  const failOf = (s: Row, fields: Record<string, unknown>) => row("failure", "walk", { selection_ref: s.id, status: 500, body: "x", ...fields })
+  const post = (rows: Row[], cell: string) => fold([ask, okStep, badStep, answerSel, answer, ...rows], [cell], seq, seq)[0]
+
+  test("[MUST-FAIL] (a) a step that failed with a 500 gets no credit from a grade of the answer it preceded", () => {
+    expect(post([failOf(badStep, {}), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 1, beta: 1 })
+  })
+
+  test("(b) a skip row names a template, not the move it was written beside: that step keeps its credit (a pin)", () => {
+    expect(post([failOf(badStep, { kind: "skip", status: undefined }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 2, beta: 1 })
+  })
+
+  test("[MUST-FAIL] (c) a step that failed with a 422 gets only that failure's r 0, never the answer's credit", () => {
+    expect(post([failOf(badStep, { status: 422 }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 1, beta: 2 })
+  })
+
+  test("[MUST-FAIL] (d) a failure the walk records for its own decline (too_big, unrunnable) also leaves the step out", () => {
+    for (const kind of ["too_big", "unrunnable"]) {
+      expect(post([failOf(badStep, { kind, status: kind === "unrunnable" ? 400 : undefined }), verdict(1)], "bad-step").alpha).toBe(1)
+    }
+  })
+
+  test("(e) a sibling step with no failure, and the answer's own selection, are still credited (a guard)", () => {
+    const rows = [failOf(badStep, {}), verdict(1)]
+    expect(post(rows, "ok-step")).toEqual({ cell: "ok-step", alpha: 2, beta: 1 })
+    expect(post(rows, "answer-cell")).toEqual({ cell: "answer-cell", alpha: 2, beta: 1 })
+  })
+
+  test("(f) a failure row another writer wrote does not remove the step (a guard)", () => {
+    expect(post([failOf(badStep, { writer: "someone-else" }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 2, beta: 1 })
+  })
+
+  test("(g) a lapse still debits the waits after the deadline (a guard: only failed steps leave the chain)", () => {
+    const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
+    const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const waitSel = row("selection", "walk", { arm: "treated", cell: "wait-cell" })
+    const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id, waitSel.id] })
+    const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
+    expect(fold([ask, dueSel, due, waitSel, graderSel, lapse], ["wait-cell"], seq, seq)[0]).toEqual({ cell: "wait-cell", alpha: 1, beta: 2 })
+  })
+})
+
 describe("a detector's gap row", () => {
   test("never counts as a grade or a move's failure (a pin: fold never read gap rows)", () => {
     const sel = row("selection", "walk", { arm: "treated", cell: "x" })
