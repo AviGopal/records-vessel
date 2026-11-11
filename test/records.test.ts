@@ -126,7 +126,7 @@ describe("records vessel", () => {
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b))
   })
 
-  test("record_lapsed lists a past deadline whose request has no answer and no grade", async () => {
+  test("record_lapsed lists each request's first past deadline that no grade judged, answered by the walk or not", async () => {
     const walk = { writer: "walk-test", role: "walk" }
     const desc = { writer: "described-test", role: "described" }
     const ask = (await write(PERSON_KEY, { shape: "world_changed", what: "q" })).body
@@ -144,8 +144,10 @@ describe("records vessel", () => {
     await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, gradedDue.id], evidence_refs: [gradedDue.id] }, desc)
     const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
     expect(got.status).toBe(200)
-    expect((got.body as Array<{ id: string }>).map((r) => r.id)).toEqual([lapsedDue.id])
-    expect(answeredDue.id).toBeDefined()
+    // ask: a counted lapse grade (r 0 on gradedDue) has closed it, so nothing more of it lapses, lapsedDue included.
+    // ask2: an answer from the walk alone does not end a request, so its first deadline lapsed.
+    expect((got.body as Array<{ id: string }>).map((r) => r.id)).toEqual([answeredDue.id])
+    expect(lapsedDue.id).toBeDefined()
     expect((await call(NODE_KEY, { type: "record_lapsed" })).status).toBe(400)
   })
 

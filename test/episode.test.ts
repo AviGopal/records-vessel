@@ -43,10 +43,14 @@ const fresh = async () => {
   }
   const write = (key: string, row: object, as?: { writer: string; role: string }) => call(key, { type: "record_write", row, ...(as ?? {}) })
   const episode = async (): Promise<string[]> => ((await call(NODE_KEY, { type: "record_read", episode: WALK })) as Array<{ id: string }>).map((r) => r.id)
+  const episodes = async () => (await call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as
+    { shared: Array<{ id: string }>; roots: Array<{ root: { id: string }; rows: Array<{ id: string }> }> }
+  const lapsed = async (): Promise<string[]> =>
+    ((await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })) as Array<{ id: string }>).map((r) => r.id)
   const ask = (what: string) => write(PERSON_KEY, { shape: "world_changed", what })
   const arm = () => write(NODE_KEY, { shape: "arm", vessel_id: WALK, arm: "treated" }, owner)
   const select = (root: string) => write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", pool_refs: [root], input_refs: [root] }, walk)
-  return { write, episode, ask, arm, select }
+  return { write, episode, episodes, lapsed, ask, arm, select }
 }
 
 describe("the walk's episode", () => {
@@ -104,6 +108,47 @@ describe("the walk's episode", () => {
     expect(ep).toContain(mine.id)
     expect(ep).not.toContain(theirs.id)
     expect(ep).not.toContain(hop.id)
+  })
+
+  test("[MUST-FAIL] read with roots all: every open request, oldest first, each with only its own work; shared rows once", async () => {
+    const r = await fresh()
+    await r.arm()
+    const ch = await r.write(NODE_KEY, { shape: "channel", calls: [] }, owner)
+    const first = await r.ask("first")
+    const second = await r.ask("second")
+    const mine = await r.select(first.id)
+    const theirs = await r.select(second.id)
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([first.id, second.id])
+    expect(all.roots[0].rows.map((x) => x.id)).toContain(mine.id)
+    expect(all.roots[0].rows.map((x) => x.id)).not.toContain(theirs.id)
+    expect(all.roots[1].rows.map((x) => x.id)).toContain(theirs.id)
+    expect(all.shared.filter((x) => x.id === ch.id)).toHaveLength(1)
+    for (const e of all.roots) expect(e.rows.map((x) => x.id)).not.toContain(ch.id)
+    expect(await r.episode()).toContain(first.id) // the old form is unchanged
+    expect(await r.episode()).not.toContain(second.id)
+  })
+
+  test("[MUST-FAIL] a request answered only by its walk lapses at its FIRST deadline; a later deadline does not move it", async () => {
+    const r = await fresh()
+    const ask = await r.ask("first")
+    const sel = await r.select(ask.id)
+    const firstDue = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await r.write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await r.write(NODE_KEY, { shape: "due", within_ms: 3_600_000, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await Bun.sleep(20)
+    expect(await r.lapsed()).toEqual([firstDue.id])
+  })
+
+  test("a person's verdict before the first deadline ends the request: nothing lapses", async () => {
+    const r = await fresh()
+    const ask = await r.ask("first")
+    const sel = await r.select(ask.id)
+    await r.write(NODE_KEY, { shape: "due", within_ms: 300, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [answer.id] })
+    await Bun.sleep(350)
+    expect(await r.lapsed()).toEqual([])
   })
 
   test("with no request open, the walk idles on its arm, as before", async () => {
