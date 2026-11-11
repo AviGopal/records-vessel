@@ -100,6 +100,16 @@ describe("records vessel", () => {
     expect(real.body.writer).toBe("kid-person")
   })
 
+  test("[MUST-FAIL] a gap row is written only under the node's own key: a person key gets 403, and nothing is written", async () => {
+    const before = (await call(NODE_KEY, { type: "record_read", shape: "gap" })).body.length
+    const refused = await write(PERSON_KEY, { shape: "gap", gap_id: "g1", status: "open", summary: "x" })
+    expect(refused.status).toBe(403)
+    expect((await call(NODE_KEY, { type: "record_read", shape: "gap" })).body.length).toBe(before)
+    const ok = await write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "open", summary: "x" }, { writer: "pull-sync", role: "detector" })
+    expect(ok.status).toBe(200)
+    expect(ok.body.role).toBe("detector")
+  })
+
   test("a key identity rejects gets 401", async () => {
     expect((await write("not-a-key", { shape: "note" })).status).toBe(401)
   })

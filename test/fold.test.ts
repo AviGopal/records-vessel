@@ -167,7 +167,7 @@ describe("a move that failed", () => {
 })
 
 describe("a detector's gap row", () => {
-  test("[MUST-FAIL] never counts as a grade or a move's failure", () => {
+  test("never counts as a grade or a move's failure (a pin: fold never read gap rows)", () => {
     const sel = row("selection", "walk", { arm: "treated", cell: "x" })
     const gap = row("gap", "detector", { gap_id: "g1", status: "open", r: 0, selection_ref: sel.id, status_code: 422 })
     const closed = row("gap", "detector", { gap_id: "g1", status: "closed", r: 1, input_refs: [sel.id] })

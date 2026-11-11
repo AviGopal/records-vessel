@@ -4,7 +4,7 @@ import { PORT, VESSEL_ID } from "./config"
 import { fold } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
+import { GAP, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
 import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -28,6 +28,11 @@ const answer = (status: number, value: unknown): Response => Response.json(value
 const HANDLERS = new Map<string, Handler>([
   [RECORD_WRITE, async (p, who) => {
     if (!who.self) {
+      // A gap is a detector's observation on this node. Under a person's key it would be stamped a person row, an open
+      // request the walk would work: a forged ask. Only the node's own key writes one.
+      if (String(p.row?.shape) === GAP) {
+        return fail(403, "a gap row is written only under the node's own key")
+      }
       const out = write(p.row, who.keyId, PERSON)
       return answer(out.status, out.body)
     }
