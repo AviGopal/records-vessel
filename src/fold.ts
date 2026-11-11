@@ -7,7 +7,9 @@ export type Post = { cell: string; alpha: number; beta: number }
 const GIVEN = new Set([PERSON, OWNER])
 const GRADERS = new Set([DESCRIBED, PERSON])
 
-export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string> }
+// by: the grader's role (person, or described for the walk's own outcome); deadline: the judged row is a deadline, so
+// a counted grade of it at r 0 is a lapse.
+export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string>; by: string; deadline: boolean }
 
 // Every grade among the rows, with whether it counts and what it judges. The fold folds the ones that count; the
 // lapse detector uses the same answer, so a grade the fold refuses never hides a lapse.
@@ -38,7 +40,7 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const ok = typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1 && judged.length === 1 && s !== undefined && treated(s.id) && (o.role === PERSON || (clean && treated(o.selection_ref))) && timely
     const after = deadline ? [sels.get(String(o.selection_ref))?.pool_refs].flat().map((id) => sels.get(String(id))).filter((x) => x !== undefined && x.seq > Number(j?.seq)) : []
     const chain = ok ? [s, ...[s.pool_refs].flat().map((id) => sels.get(String(id))), ...after] : []
-    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id)).map((x) => String(x?.cell))) }
+    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id)).map((x) => String(x?.cell))), by: String(o.role), deadline }
   }
   return seen
     .filter((r) => r.shape === OUTCOME)

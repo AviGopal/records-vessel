@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { grades } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, DESCRIBED, FAILURE, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -91,18 +91,39 @@ export const read = (q: Query): Row[] => {
 const exogenous = (from: Row[]): Row[] =>
   from.filter((r) => EXO_ROLES.has(r.role)).filter((r) => !OWNER_SHAPES.has(r.shape))
 
+// A request is closed when a counted grade says how it ended (fold.ts grades, the fold's own predicate): DONE by a
+// person's verdict at r 1 on an answer to it; FAILED by a lapse (a counted r 0 on its deadline row). A described
+// outcome at r 1 is the walk grading its own answer and does not close a request: an independent grade (by information,
+// not only by a person) would, and is not built yet. "Answers it" is provenance: the judged row cites the request in
+// its input_refs.
+const closed = (): Set<string> => {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const out = new Set<string>()
+  for (const g of grades(rows, seq, seq).filter((k) => k.ok)) {
+    const ends = (g.r === 1 && g.by === PERSON) || (g.r === 0 && g.deadline)
+    if (ends) for (const id of [byId.get(g.judged)?.input_refs].flat()) out.add(String(id))
+  }
+  return out
+}
+
+// The episode a walk works: the OLDEST open request (an exogenous row that is not a grade and is not closed), so a
+// newer request never evicts an older one and a closed one never blocks the next; with none open, the walk's newest
+// arm row, as it idles. It holds the rows descended from that root: the walk's selections whose pool held it, their
+// hops and failures, the described rows those selections made, and the owner's channels, schemas and the walk's
+// templates. A newer request's work is not in an older root's episode.
 export const episode = (w: string): Row[] => {
   const arms = rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w)
-  const starts = new Set([...exogenous(rows), ...arms].map((r) => r.id))
-  const [e] = rows.filter((r) => starts.has(r.id)).map((r) => r.seq).reverse().concat([0])
-  const after = rows.filter((r) => r.seq > e)
+  const done = closed()
+  const open = exogenous(rows).filter((r) => r.shape !== OUTCOME).filter((r) => !done.has(r.id))
+  const root = open[0] ?? arms[arms.length - 1]
   const allSels = new Set(rows.filter((r) => r.shape === SELECTION).filter((r) => r.writer === w).map((r) => r.id))
-  const own = after.filter((r) => MINE.has(r.shape)).filter((r) => r.writer === w)
-  const sels = new Set(own.filter((r) => r.shape === SELECTION).map((r) => r.id))
+  const mine = rows.filter((r) => MINE.has(r.shape)).filter((r) => r.writer === w)
+  const held = (r: Row): boolean => root !== undefined && [r.pool_refs, r.input_refs].flat().map(String).includes(root.id)
+  const sels = new Set(mine.filter((r) => r.shape === SELECTION).filter(held).map((r) => r.id))
   const keep = new Set([
-    ...rows.filter((r) => r.seq === e),
-    ...own,
-    ...after.filter((r) => r.role === DESCRIBED).filter((r) => sels.has(String(r.selection_ref))),
+    ...(root ? [root] : []),
+    ...mine.filter((r) => sels.has(r.shape === SELECTION ? r.id : String(r.selection_ref))),
+    ...rows.filter((r) => r.role === DESCRIBED).filter((r) => r.shape !== ACTIVITY_TEMPLATE).filter((r) => sels.has(String(r.selection_ref))),
     ...rows.filter((r) => r.role === OWNER).filter((r) => r.shape === CHANNEL),
     ...rows.filter((r) => r.role === OWNER).filter((r) => r.shape === SHAPE_SCHEMA),
     ...rows.filter((r) => r.shape === ACTIVITY_TEMPLATE).filter((r) => r.role === DESCRIBED)
