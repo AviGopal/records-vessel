@@ -13,6 +13,7 @@ type Pointer = Query & {
   shapes: string[]
   cells: string[]
   as_of_seq: number
+  until?: number
   writer?: string
   role?: string
   deadline_shape?: string
