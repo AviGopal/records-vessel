@@ -234,6 +234,18 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([lifted.id])
   })
 
+  test("a person's grade on a gap row neither lifts a hold, closes a gap nor is a root: only a detector's row does (a guard)", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const held = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-held", status: "open", meta: { operator_hold: true } }, detector)
+    const open = await gap(r, "g-open", "open")
+    for (const [ref, v] of [[held.id, 1], [held.id, 0], [open.id, 1], [open.id, 0]] as const) {
+      expect((await r.write(PERSON_KEY, { shape: "outcome", r: v, input_refs: [ref] })).role).toBe("person")
+    }
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([open.id]) // the held gap stays held, the open one open
+    expect(arm.id).toBeDefined()
+  })
+
   test("[MUST-FAIL] a person's ask and an open gap are both roots, oldest first, each with its own work", async () => {
     const r = await fresh()
     await r.arm()

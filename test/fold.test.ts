@@ -343,6 +343,15 @@ describe("a cell with no evidence of its own backs off to a coarser one", () => 
 })
 
 describe("a detector's gap row", () => {
+  test("a person's grade on a gap row judges nothing: refused as judged, no cell moves (a guard: answers keep only described rows)", () => {
+    const sel = row("selection", "walk", { arm: "treated", cell: "x" })
+    const gap = row("gap", "detector", { gap_id: "g1", status: "open", selection_ref: sel.id, input_refs: [sel.id] })
+    const right = row("outcome", "person", { r: 1, input_refs: [gap.id] })
+    const wrong = row("outcome", "person", { r: 0, input_refs: [gap.id] })
+    const gs = F.grades([sel, gap, right, wrong], seq, seq)
+    expect(gs.slice(-2)).toMatchObject([{ ok: false, refused: "judged" }, { ok: false, refused: "judged" }])
+    expect(fold([sel, gap, right, wrong], ["x"], seq, seq)[0]).toEqual({ cell: "x", alpha: 1, beta: 1 })
+  })
   test("never counts as a grade or a move's failure (a pin: fold never read gap rows)", () => {
     const sel = row("selection", "walk", { arm: "treated", cell: "x" })
     const gap = row("gap", "detector", { gap_id: "g1", status: "open", r: 0, selection_ref: sel.id, status_code: 422 })
