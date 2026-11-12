@@ -371,6 +371,22 @@ describe("the walk's episode", () => {
     expect(await sharedIds(r)).not.toContain(t.id)
   })
 
+  test("[MUST-FAIL] a person's verdict on what a row cites is a grade, not a request: it is never a root", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("change something")
+    const v = await r.write(PERSON_KEY, { shape: "land_verdict", repo: "demo", tree: "a".repeat(40), r: 1, input_refs: [a.id] })
+    const roots = (await r.episodes()).roots.map((x: any) => x.root.id)
+    expect(roots).toContain(a.id)
+    expect(roots).not.toContain(v.id)
+    // an ask that happens to carry an r but judges nothing is still a request; a person's outcome stays a grade as before
+    const odd = await r.write(PERSON_KEY, { shape: "world_changed", what: "r is a word here", r: 1 })
+    const o = await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [a.id] })
+    const after = (await r.episodes()).roots.map((x: any) => x.root.id)
+    expect(after).toContain(odd.id)
+    expect(after).not.toContain(o.id)
+  })
+
   test("[MUST-FAIL] every root says whether an answer is awaited: a person's ask and a detector's gap do; the walk's arm does not", async () => {
     const r = await fresh()
     await r.arm()

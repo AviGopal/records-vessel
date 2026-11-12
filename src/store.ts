@@ -127,9 +127,14 @@ const openGaps = (from: Row[]): Row[] => {
   return [...latest.values()].filter((r) => r.status === "open" && !held(r))
 }
 
+// A row that carries a verdict (r 0 or 1 on rows it cites) judges something: it is a grade, whatever its shape, not a
+// request. A person's verdict on a change (a land_verdict citing its diff) is one; were it a root, nothing would ever
+// close it, since what closes a request is a grade of an answer to it.
+const verdict = (r: Row): boolean => (r.r === 0 || r.r === 1) && [r.input_refs].flat().filter((x) => x !== undefined).length > 0
+
 const openRoots = (w: string): Row[] => {
   const done = closed()
-  const open = [...exogenous(rows).filter((r) => r.shape !== OUTCOME).filter((r) => !done.has(r.id)), ...openGaps(rows)]
+  const open = [...exogenous(rows).filter((r) => r.shape !== OUTCOME).filter((r) => !verdict(r)).filter((r) => !done.has(r.id)), ...openGaps(rows)]
     .sort((a, b) => a.seq - b.seq)
   if (open.length > 0) return open
   const arms = rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w)
