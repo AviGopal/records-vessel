@@ -219,6 +219,37 @@ describe("the walk's episode", () => {
     expect((await r.write(PERSON_KEY, { shape: "credits", target: "gap", by_call: "x" })).failure?.status).toBe(403) // owner rows only
   })
 
+  test("[MUST-FAIL] a read of the walk's calls of named shapes answers each with its root, the root's state and the call's, never the rows behind them", async () => {
+    const r = await fresh()
+    await r.arm()
+    const w1 = await r.ask("open request")
+    const w2 = await r.ask("closed request")
+    // the live forms: a selection names its root; a started hop names the shape called; an ended hop carries only call_id
+    const sel = (root: string) => r.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", root, pool_refs: [root], input_refs: [root], cands: "x".repeat(40_000) }, walk)
+    const s1 = await sel(w1.id)
+    const s2 = await sel(w2.id)
+    const started = (s: { id: string }, type: string, call: string) =>
+      r.write(NODE_KEY, { shape: "hop", phase: "started", kind: "call", pointer_type: type, call_id: call, selection_ref: s.id, input_refs: [s.id] }, walk)
+    await started(s1, "clone_it", "c1")
+    await r.write(NODE_KEY, { shape: "hop", phase: "ended", kind: "call", call_id: "c1", selection_ref: s1.id, output: { cwd: "/trees/a" }, input_refs: [s1.id] }, walk)
+    await started(s1, "clone_it", "c2") // still in flight
+    await started(s2, "clone_it", "c3")
+    await r.write(NODE_KEY, { shape: "failure", call_id: "c3", selection_ref: s2.id, status: 0, body: "x", input_refs: [s2.id] }, walk)
+    await started(s1, "read_it", "c4") // a shape not asked for, still in flight: answered, since a reader must not disturb it
+    await started(s1, "read_it", "c5") // a shape not asked for, ended: not answered
+    await r.write(NODE_KEY, { shape: "hop", phase: "ended", kind: "call", call_id: "c5", selection_ref: s1.id, output: {}, input_refs: [s1.id] }, walk)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [w2.id] }) // not an answer: w2 stays open too
+    const got = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, calls: ["clone_it"] })) as Array<Record<string, unknown>>
+    const by = Object.fromEntries(got.map((c) => [c.call_id, c]))
+    expect(Object.keys(by).sort()).toEqual(["c1", "c2", "c3", "c4"])
+    expect([by.c4.type, by.c4.state]).toEqual(["read_it", "started"])
+    expect([by.c1.state, by.c2.state, by.c3.state]).toEqual(["ended", "started", "failed"])
+    expect(by.c1.root).toBe(w1.id)
+    expect(by.c1.open).toBe(true)
+    expect((by.c1.output as { cwd: string }).cwd).toBe("/trees/a")
+    expect(JSON.stringify(got)).not.toContain("x".repeat(100)) // no selection row rides along
+  })
+
   const detector = { writer: "pull-sync", role: "detector" }
   const gap = (r: Awaited<ReturnType<typeof fresh>>, id: string, status: string) =>
     r.write(NODE_KEY, { shape: "gap", gap_id: id, status, summary: "a check fails" }, detector)

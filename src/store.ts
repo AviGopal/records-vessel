@@ -16,6 +16,7 @@ export type Query = {
   where?: Record<string, unknown>
   episode?: string
   roots?: string
+  calls?: string[]
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS])
@@ -285,7 +286,33 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number,
   return [...out.values()]
 }
 
-export const serveRead = (q: Query): Row[] | ReturnType<typeof episodes> => {
+// The walk's calls of the shapes a caller names, each with the root it worked for, whether that root is open, and how
+// the call stands (started, ended with its output, or failed), read without the rows behind them. A reader that needs
+// only which calls went where (which clone a root holds, which landed, what is in flight) reads this instead of every
+// selection, hop and failure: its size grows with those calls, never with what the selections saw. Every call still in
+// flight is answered too, whatever its shape: what is in flight is what such a reader must not disturb.
+export type Call = { call_id: string; type: string; selection_ref: string; root: string; open: boolean; state: "started" | "ended" | "failed"; seq: number; t: string; output?: unknown }
+export const walkCalls = (w: string, types: string[]): Call[] => {
+  const want = new Set(types.map(String))
+  const open = new Set(openRoots(w).map((r) => r.id))
+  const mine = rows.filter((r) => MINE.has(r.shape) && r.writer === w)
+  const sels = new Map(mine.filter((r) => r.shape === SELECTION).map((s) => [s.id, s]))
+  const ended = new Map(mine.filter((r) => r.shape === HOP && r.phase === "ended").map((r) => [String(r.call_id), r]))
+  const failed = new Set(mine.filter((r) => r.shape === FAILURE).map((r) => String(r.call_id)))
+  const settled = (id: string) => ended.has(id) || failed.has(id)
+  return mine.filter((r) => r.shape === HOP && r.phase === "started" && (want.has(String(r.pointer_type)) || !settled(String(r.call_id)))).map((h) => {
+    const id = String(h.call_id)
+    const root = String(sels.get(String(h.selection_ref))?.root ?? "")
+    const e = ended.get(id)
+    return {
+      call_id: id, type: String(h.pointer_type), selection_ref: String(h.selection_ref), root, open: open.has(root),
+      state: e ? "ended" : failed.has(id) ? "failed" : "started", seq: h.seq, t: h.t, ...(e ? { output: e.output } : {}),
+    }
+  })
+}
+
+export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> => {
+  if (q.episode !== undefined && Array.isArray(q.calls)) return walkCalls(q.episode, q.calls)
   if (q.episode !== undefined) {
     return q.roots === "all" ? episodes(q.episode) : episode(q.episode)
   }
