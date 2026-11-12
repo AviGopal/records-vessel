@@ -291,7 +291,11 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number,
 // only which calls went where (which clone a root holds, which landed, what is in flight) reads this instead of every
 // selection, hop and failure: its size grows with those calls, never with what the selections saw. Every call still in
 // flight is answered too, whatever its shape: what is in flight is what such a reader must not disturb.
-export type Call = { call_id: string; type: string; selection_ref: string; root: string; open: boolean; state: "started" | "ended" | "failed"; seq: number; t: string; output?: unknown }
+// The walk makes one move at a time, so only a call under its newest selection can still be in flight: one started
+// under an older selection that neither ended nor failed was cut off (the walk stopped mid-call) and is abandoned. A call
+// under a selection records does not hold cannot be placed (the walk writes its selection before its calls), so it is
+// read as in flight: a reader keeps what it might be using rather than guess.
+export type Call = { call_id: string; type: string; selection_ref: string; root: string; open: boolean; state: "started" | "ended" | "failed" | "abandoned"; seq: number; t: string; output?: unknown }
 export const walkCalls = (w: string, types: string[]): Call[] => {
   const want = new Set(types.map(String))
   const open = new Set(openRoots(w).map((r) => r.id))
@@ -299,14 +303,16 @@ export const walkCalls = (w: string, types: string[]): Call[] => {
   const sels = new Map(mine.filter((r) => r.shape === SELECTION).map((s) => [s.id, s]))
   const ended = new Map(mine.filter((r) => r.shape === HOP && r.phase === "ended").map((r) => [String(r.call_id), r]))
   const failed = new Set(mine.filter((r) => r.shape === FAILURE).map((r) => String(r.call_id)))
+  const newest = mine.filter((r) => r.shape === SELECTION).reduce<Row | undefined>((a, r) => (a === undefined || r.seq > a.seq ? r : a), undefined)
   const settled = (id: string) => ended.has(id) || failed.has(id)
-  return mine.filter((r) => r.shape === HOP && r.phase === "started" && (want.has(String(r.pointer_type)) || !settled(String(r.call_id)))).map((h) => {
+  const live = (h: Row) => !settled(String(h.call_id)) && (String(h.selection_ref) === newest?.id || !sels.has(String(h.selection_ref)))
+  return mine.filter((r) => r.shape === HOP && r.phase === "started" && (want.has(String(r.pointer_type)) || live(r))).map((h) => {
     const id = String(h.call_id)
     const root = String(sels.get(String(h.selection_ref))?.root ?? "")
     const e = ended.get(id)
     return {
       call_id: id, type: String(h.pointer_type), selection_ref: String(h.selection_ref), root, open: open.has(root),
-      state: e ? "ended" : failed.has(id) ? "failed" : "started", seq: h.seq, t: h.t, ...(e ? { output: e.output } : {}),
+      state: e ? "ended" : failed.has(id) ? "failed" : live(h) ? "started" : "abandoned", seq: h.seq, t: h.t, ...(e ? { output: e.output } : {}),
     }
   })
 }

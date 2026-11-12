@@ -219,30 +219,42 @@ describe("the walk's episode", () => {
     expect((await r.write(PERSON_KEY, { shape: "credits", target: "gap", by_call: "x" })).failure?.status).toBe(403) // owner rows only
   })
 
-  test("[MUST-FAIL] a read of the walk's calls of named shapes answers each with its root, the root's state and the call's, never the rows behind them", async () => {
+  test("[MUST-FAIL] a read of the walk's calls of named shapes answers each with its root, the root's state and the call's (abandoned once the walk moved on), never the rows behind them", async () => {
     const r = await fresh()
     await r.arm()
     const w1 = await r.ask("open request")
     const w2 = await r.ask("closed request")
     // the live forms: a selection names its root; a started hop names the shape called; an ended hop carries only call_id
     const sel = (root: string) => r.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", root, pool_refs: [root], input_refs: [root], cands: "x".repeat(40_000) }, walk)
-    const s1 = await sel(w1.id)
-    const s2 = await sel(w2.id)
+    // the walk's own order: a selection, then the calls it makes, one move at a time
     const started = (s: { id: string }, type: string, call: string) =>
       r.write(NODE_KEY, { shape: "hop", phase: "started", kind: "call", pointer_type: type, call_id: call, selection_ref: s.id, input_refs: [s.id] }, walk)
+    const s1 = await sel(w1.id)
     await started(s1, "clone_it", "c1")
     await r.write(NODE_KEY, { shape: "hop", phase: "ended", kind: "call", call_id: "c1", selection_ref: s1.id, output: { cwd: "/trees/a" }, input_refs: [s1.id] }, walk)
-    await started(s1, "clone_it", "c2") // still in flight
-    await started(s2, "clone_it", "c3")
-    await r.write(NODE_KEY, { shape: "failure", call_id: "c3", selection_ref: s2.id, status: 0, body: "x", input_refs: [s2.id] }, walk)
-    await started(s1, "read_it", "c4") // a shape not asked for, still in flight: answered, since a reader must not disturb it
     await started(s1, "read_it", "c5") // a shape not asked for, ended: not answered
     await r.write(NODE_KEY, { shape: "hop", phase: "ended", kind: "call", call_id: "c5", selection_ref: s1.id, output: {}, input_refs: [s1.id] }, walk)
+    const s2 = await sel(w2.id)
+    await started(s2, "clone_it", "c3")
+    await r.write(NODE_KEY, { shape: "failure", call_id: "c3", selection_ref: s2.id, status: 0, body: "x", input_refs: [s2.id] }, walk)
+    const s3 = await sel(w1.id) // the walk's newest move: a run of two calls, both still in flight
+    await started(s3, "clone_it", "c2")
+    await started(s3, "read_it", "c4") // a shape not asked for, in flight: answered, since a reader must not disturb it
     await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [w2.id] }) // not an answer: w2 stays open too
     const got = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, calls: ["clone_it"] })) as Array<Record<string, unknown>>
     const by = Object.fromEntries(got.map((c) => [c.call_id, c]))
     expect(Object.keys(by).sort()).toEqual(["c1", "c2", "c3", "c4"])
     expect([by.c4.type, by.c4.state]).toEqual(["read_it", "started"])
+    // the walk moves on (a newer selection): a call left unsettled under an older one was cut off, not in flight
+    await sel(w1.id)
+    const after = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, calls: ["clone_it"] })) as Array<Record<string, unknown>>
+    const by2 = Object.fromEntries(after.map((c) => [c.call_id, c]))
+    expect(Object.keys(by2).sort()).toEqual(["c1", "c2", "c3"]) // c4, of another shape, is no longer in flight
+    expect([by2.c1.state, by2.c2.state, by2.c3.state]).toEqual(["ended", "abandoned", "failed"])
+    // a call under a selection records does not hold cannot be placed: read as in flight, never as abandoned
+    await r.write(NODE_KEY, { shape: "hop", phase: "started", kind: "call", pointer_type: "read_it", call_id: "c6", selection_ref: "sel-unheld", input_refs: [] }, walk)
+    const unplaced = ((await r.call(NODE_KEY, { type: "record_read", episode: WALK, calls: ["clone_it"] })) as Array<Record<string, unknown>>).find((c) => c.call_id === "c6")
+    expect(unplaced?.state).toBe("started")
     expect([by.c1.state, by.c2.state, by.c3.state]).toEqual(["ended", "started", "failed"])
     expect(by.c1.root).toBe(w1.id)
     expect(by.c1.open).toBe(true)
