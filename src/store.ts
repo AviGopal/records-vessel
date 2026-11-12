@@ -197,16 +197,15 @@ export const episode = (w: string): Row[] => {
 
 // Every open root with its own rows, oldest first, and the rows they share listed once: which request to work is the
 // walk's selection to make, not this store's. With none open, the walk's newest arm, as it idles.
-// Whether anyone awaits an answer on a root: a person's or the owner's request does; the walk's arm (idling) and a gap a
-// detector opened do not, so the walk may wait on them unbounded. Stated here, where roots are made, so the walk reads it
-// and never needs to know a shape's name.
-export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => {
-  const gaps = new Set(openGaps(rows).map((r) => r.id))
-  return {
-    shared: shared(w),
-    roots: openRoots(w).map((root) => ({ root, rows: rootRows(w, root), awaits: root.shape !== ARM && !gaps.has(root.id) })),
-  }
-}
+// Whether anyone awaits an answer on a root: a person's or the owner's request does, and so does a gap a detector opened
+// (it awaits the change its check passes on); only the walk's arm does not, so only idling is waited through unbounded.
+// A wait is answered by the next person or owner row, which no one writes for a detector's gap: one taken there would
+// hold every root until an unrelated row came. Stated here, where roots are made, so the walk reads it and never needs
+// to know a shape's name.
+export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => ({
+  shared: shared(w),
+  roots: openRoots(w).map((root) => ({ root, rows: rootRows(w, root), awaits: root.shape !== ARM })),
+})
 
 // Answers the first row scan finds, rescanning on every write. Given a deadline it answers null at that time and
 // withdraws its waker, so a wait that ended empty stops rescanning: one left behind per timed-out wait would rescan

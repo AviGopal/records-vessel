@@ -371,13 +371,15 @@ describe("the walk's episode", () => {
     expect(await sharedIds(r)).not.toContain(t.id)
   })
 
-  test("[MUST-FAIL] every root says whether an answer is awaited: a person's ask does; a detector's gap and the walk's arm do not", async () => {
+  test("[MUST-FAIL] every root says whether an answer is awaited: a person's ask and a detector's gap do; the walk's arm does not", async () => {
     const r = await fresh()
     await r.arm()
     const g = await gap(r, "g1", "open")
     const a = await r.ask("hello")
     const by = new Map((await r.episodes()).roots.map((x: any) => [x.root.id, x.awaits]))
-    expect([by.get(g.id), by.get(a.id)]).toEqual([false, true])
+    // a gap awaits the change its detector checks for: the walk waits on it only by a deadline, never unbounded, since a
+    // wait ends on a person's or the owner's row, which no one writes for a gap
+    expect([by.get(g.id), by.get(a.id)]).toEqual([true, true])
     const idle = await fresh()
     const arm = await idle.arm()
     expect(((await idle.episodes()).roots as any[]).find((x) => x.root.id === arm.id)?.awaits).toBe(false)
