@@ -210,6 +210,15 @@ describe("the walk's episode", () => {
     expect((await r.write(PERSON_KEY, { shape: "shape_description", of: "x" })).failure?.status).toBe(403) // owner rows only
   })
 
+  test("[MUST-FAIL] the owner's credits rule is configuration, not a request, and only the owner writes one", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, { shape: "credits", target: "gap", by_call: "land_it" }, owner)
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.shape)).toEqual(["arm"]) // idle: nothing to work
+    expect((await r.write(PERSON_KEY, { shape: "credits", target: "gap", by_call: "x" })).failure?.status).toBe(403) // owner rows only
+  })
+
   const detector = { writer: "pull-sync", role: "detector" }
   const gap = (r: Awaited<ReturnType<typeof fresh>>, id: string, status: string) =>
     r.write(NODE_KEY, { shape: "gap", gap_id: id, status, summary: "a check fails" }, detector)

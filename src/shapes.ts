@@ -19,6 +19,10 @@ export const SHAPE_DESCRIPTION = "shape_description"
 // The owner's precondition on a call: the shape it names is called only when the root holds a row its needs and where
 // describe. Configuration, read by the walk where it chooses, never work.
 export const REQUIRES = "requires"
+// The owner's rule for crediting work no one grades: {target, by_call}. A detector closing a row of the target shape
+// credits the walk's steps on it only when a call of by_call ended among them first (fold.ts gapClosures). Configuration,
+// never work.
+export const CREDITS = "credits"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.

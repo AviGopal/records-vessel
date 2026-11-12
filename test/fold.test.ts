@@ -197,7 +197,7 @@ describe("posterior fold", () => {
     const sawHops = grade({ input_refs: [ask.id, answer.id, hop.id] }) // an answer grade that saw the walk's hops: refused
     const person = verdict({}) // a person's grade: not the walk's own, not tallied
     const t = F.tally?.([...base, dueSel, due, graderSel, lapse, sawHops, person], seq, seq)
-    expect(t).toEqual({ written: { answer: 1, lapse: 1 }, counted: { answer: 0, lapse: 1 }, refused: { unclean: 1 } })
+    expect(t).toEqual({ written: { answer: 1, lapse: 1, detector: 0 }, counted: { answer: 0, lapse: 1, detector: 0 }, refused: { unclean: 1 } })
   })
 
   test("a row with only a guessed `at` (no within_ms) is not a deadline: no waits are debited", () => {
@@ -376,3 +376,65 @@ describe("a detector's gap row", () => {
     expect(fold([sel, gap, closed], ["x"], seq, seq)[0]).toEqual({ cell: "x", alpha: 1, beta: 1 })
   })
 })
+
+// A gap no one asks for is closed by its detector; that closing credits the walk's steps on it only after the walk
+// changed something there (a call of the owner's credits.by_call that ended, in a selection that did not fail). Rows are
+// in the live forms: the started hop names the shape called, the ended hop only its call_id; a gap row is the detector's.
+describe("a detector closing a gap", () => {
+  let n = 0
+  const at = (shape: string, role: string, fields: Record<string, unknown>): Row =>
+    ({ shape, role, writer: role, id: `${shape}-g${++n}`, seq: 0, t: "", input_refs: [], ...fields }) as Row
+  const build = (steps: Array<(rows: Row[]) => Row[] | Row>) => {
+    const rows: Row[] = []
+    for (const s of steps) for (const r of [s(rows)].flat()) rows.push({ ...r, seq: rows.length + 1 })
+    return rows
+  }
+  const rule = () => at("credits", "owner", { target: "gap", by_call: "land_it" })
+  const gapRow = (status: string) => () => at("gap", "detector", { gap_id: "g1", status })
+  const last = (rows: Row[], shape: string) => [...rows].reverse().find((r) => r.shape === shape)!
+  const sel = (cell: string) => (rows: Row[]) => at("selection", "walk", { arm: "treated", cell, pool_refs: [last(rows, "gap").id] })
+  const call = (type: string, ok = true) => (rows: Row[]) => {
+    const s = last(rows, "selection")
+    const id = `call-${++n}`
+    return [
+      at("hop", "walk", { phase: "started", kind: "call", pointer_type: type, call_id: id, selection_ref: s.id }),
+      ok ? at("hop", "walk", { phase: "ended", call_id: id, selection_ref: s.id, output: { pushed: true } })
+        : at("failure", "walk", { call_id: id, selection_ref: s.id, status: 200, body: "refused" }),
+    ]
+  }
+  const post = (rows: Row[], cell: string) => fold(rows, [cell], rows.length, rows.length)[0]
+
+  test("[MUST-FAIL] a closing after the walk's landing on the gap credits every step it took there", () => {
+    const rows = build([rule, gapRow("open"), sel("ask"), sel("land"), call("land_it"), gapRow("closed")])
+    expect(post(rows, "ask")).toEqual({ cell: "ask", alpha: 2, beta: 1 })
+    expect(post(rows, "land")).toEqual({ cell: "land", alpha: 2, beta: 1 })
+    expect(F.tally(rows, rows.length, rows.length).counted.detector).toBe(1)
+  })
+
+  test("[MUST-FAIL] a closing with no landing, or after a landing that failed, credits nothing and is refused as no_change", () => {
+    const none = build([rule, gapRow("open"), sel("ask"), sel("other"), call("read_it"), gapRow("closed")])
+    expect(post(none, "ask")).toEqual({ cell: "ask", alpha: 1, beta: 1 })
+    const failed = build([rule, gapRow("open"), sel("ask"), sel("land"), call("land_it", false), gapRow("closed")])
+    expect(post(failed, "ask")).toEqual({ cell: "ask", alpha: 1, beta: 1 })
+    const t = F.tally(failed, failed.length, failed.length)
+    expect([t.written.detector, t.counted.detector, t.refused.no_change]).toEqual([1, 0, 1])
+  })
+
+  test("[MUST-FAIL] a gap that reopens credits each closing only with the work since it reopened", () => {
+    const rows = build([rule, gapRow("open"), sel("first"), call("land_it"), gapRow("closed"),
+      gapRow("open"), sel("second"), call("land_it"), gapRow("closed")])
+    expect(post(rows, "first")).toEqual({ cell: "first", alpha: 2, beta: 1 }) // once, by the first closing
+    expect(post(rows, "second")).toEqual({ cell: "second", alpha: 2, beta: 1 })
+  })
+
+  test("with no credits row the owner has not said what a change is: nothing is credited (a guard)", () => {
+    const rows = build([gapRow("open"), sel("ask"), call("land_it"), gapRow("closed")])
+    expect(post(rows, "ask")).toEqual({ cell: "ask", alpha: 1, beta: 1 })
+  })
+
+  test("a detector's closing is never a grade of an answer: it closes no request (a guard)", () => {
+    const rows = build([rule, gapRow("open"), sel("ask"), call("land_it"), gapRow("closed")])
+    expect(F.standing(rows, rows.length, rows.length)).toEqual([])
+  })
+})
+

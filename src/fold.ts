@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { DESCRIBED, FAILURE, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -92,11 +92,13 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // How the walk's own grades (described outcomes) fared, over every one written: how many were written and how many
 // counted, of answers and of deadlines (lapses) apart, and why the rest did not count. A detector reads it to see grades
 // being written that the fold never counts. Cumulative: a reader compares two of these to see what changed between.
-export type Tally = { written: { answer: number; lapse: number }; counted: { answer: number; lapse: number }; refused: Record<string, number> }
+// A detector's closing of a gap (gapClosures) is tallied as a kind of its own, so a credit path that never counts (written,
+// none counted) shows.
+export type Tally = { written: { answer: number; lapse: number; detector: number }; counted: { answer: number; lapse: number; detector: number }; refused: Record<string, number> }
 export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
-  const t: Tally = { written: { answer: 0, lapse: 0 }, counted: { answer: 0, lapse: 0 }, refused: {} }
-  for (const g of grades(all, asOf, atSeq).filter((x) => x.by === DESCRIBED)) {
-    const kind = g.deadline ? "lapse" : "answer"
+  const t: Tally = { written: { answer: 0, lapse: 0, detector: 0 }, counted: { answer: 0, lapse: 0, detector: 0 }, refused: {} }
+  for (const g of [...grades(all, asOf, atSeq).filter((x) => x.by === DESCRIBED), ...gapClosures(all, asOf, atSeq)]) {
+    const kind = g.by === DETECTOR ? "detector" : g.deadline ? "lapse" : "answer"
     t.written[kind]++
     if (g.ok) t.counted[kind]++
     else t.refused[g.refused ?? "other"] = (t.refused[g.refused ?? "other"] ?? 0) + 1
@@ -149,6 +151,57 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
   return [...out.values()]
 }
 
+// A gap no one asked for is closed only by its detector (a later row of the same gap_id that is not open: its check
+// passed), and no one grades the walk's work on it, so without this a gap root's steps could only ever lose. A detector's
+// closing counts as r 1 for the steps the walk took on that gap, by the same chain rule as an answer's grade, but only
+// when the walk changed something there first (law 12: a gap an operator fixed, or a check that turned green on its own,
+// is not the walk's): a call of the shape the owner's credits row names (by_call) ended, joined to its started hop by
+// call_id, in a treated selection of that episode with no failure, before the closing row. Otherwise it is refused as
+// no_change. An episode runs from the gap's previous closing (or its first row) to this one, so a gap that reopens and
+// closes again credits only the work since it reopened. Kept apart from grades(): what closes a request and what lapses
+// never read it. With no credits row, nothing is credited.
+// Residual (debt): an operator fix that lands beside a walk landing on the same gap still credits the walk; a closing
+// row citing what its check judged would tie it causally.
+export const gapClosures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
+  const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
+  if (by === undefined) return []
+  const sels = seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED)
+  const failed = new Set(seen
+    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+    .map((r) => String(r.selection_ref)))
+  const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started" && r.pointer_type === by)
+    .map((r) => [String(r.call_id), r]))
+  const ended = seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "ended" && started.has(String(r.call_id)))
+  const out: Grade[] = []
+  const byGap = new Map<string, Row[]>()
+  for (const r of seen.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined).sort((a, b) => a.seq - b.seq)) {
+    if (!byGap.has(String(r.gap_id))) byGap.set(String(r.gap_id), [])
+    byGap.get(String(r.gap_id))!.push(r)
+  }
+  for (const rows of byGap.values()) {
+    let since = 0
+    let open: string[] = []
+    for (const c of rows) {
+      if (c.status === "open") { open.push(c.id); continue }
+      if (open.length > 0 && c.seq <= asOf) {
+        const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
+        const chain = sels.filter((s) => s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id))
+        const ids = new Set(chain.map((s) => s.id))
+        const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
+        out.push({
+          ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
+          by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
+        })
+      }
+      since = c.seq
+      open = []
+    }
+  }
+  return out
+}
+
 // A cell is the move and everything it saw ("<move>|<context>": the shapes, the asker, the age), so the same cell
 // rarely comes twice and most draws were made at the prior: nothing learned carried to the next request. A cell with no
 // counted evidence of its own backs off to a coarser one that has some: the same move for the same asker, then the same
@@ -160,7 +213,8 @@ const asker = (c: string): string | undefined => c.split("|").slice(1).join("|")
 
 export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
-  const latest = [...new Map([...standing(all, asOf, atSeq), ...moveFailures(all, asOf, atSeq)].map((k) => [k.key, k])).values()]
+  const closures = gapClosures(all, asOf, atSeq).filter((k) => k.ok)
+  const latest = [...new Map([...standing(all, asOf, atSeq), ...moveFailures(all, asOf, atSeq), ...closures].map((k) => [k.key, k])).values()]
   return cells.map((c) => {
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],
