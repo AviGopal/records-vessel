@@ -249,6 +249,23 @@ describe("a move that failed", () => {
     expect(post([fail(sel, { status: 422, blames: "callee" })], "run/t1")).toEqual({ cell: "run/t1", alpha: 1, beta: 1 })
   })
 
+  test("[MUST-FAIL] a refusal of what a request asked lowers the produce that wrote the request, not the call that carried it", () => {
+    const wroteIt = row("selection", "walk", { arm: "treated", cell: "produce/request" })
+    const asked = row("request", "described", { selection_ref: wroteIt.id, pointer: { type: "fs_edit" } })
+    const called = row("selection", "walk", { arm: "treated", cell: "call/fs_edit", from: asked.id })
+    const at = (rows: Row[], cell: string) => fold([sel, wroteIt, asked, called, ...rows], [cell], seq, seq)[0]
+    const refused = fail(called, { status: 200, blames: "request" })
+    expect(at([refused], "produce/request")).toEqual({ cell: "produce/request", alpha: 1, beta: 2 })
+    expect(at([refused], "call/fs_edit")).toEqual({ cell: "call/fs_edit", alpha: 1, beta: 1 })
+    // a call with no request behind it, or one whose request no treated produce wrote, is the move's own, as before
+    const bare = row("selection", "walk", { arm: "treated", cell: "call/bare" })
+    expect(at([bare, fail(bare, { status: 422 })], "call/bare")).toEqual({ cell: "call/bare", alpha: 1, beta: 2 })
+    const untreated = row("selection", "walk", { arm: "control", cell: "produce/request" })
+    const asked2 = row("request", "described", { selection_ref: untreated.id })
+    const called2 = row("selection", "walk", { arm: "treated", cell: "call/fs_edit2", from: asked2.id })
+    expect(at([untreated, asked2, called2, fail(called2, { status: 422 })], "call/fs_edit2")).toEqual({ cell: "call/fs_edit2", alpha: 1, beta: 2 })
+  })
+
   test("[MUST-FAIL] a failure credits no chain: the steps before it are untouched", () => {
     expect(post([fail(chained, {})], "run/t2")).toEqual({ cell: "run/t2", alpha: 1, beta: 2 })
     expect(post([fail(chained, {})], "step2")).toEqual({ cell: "step2", alpha: 1, beta: 1 })

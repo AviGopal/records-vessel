@@ -125,18 +125,26 @@ export const blames = (f: Record<string, unknown>): "request" | "callee" | "walk
 const blamed = (f: Row): string => typeof f.blames === "string" ? f.blames
   : (f.kind === undefined && typeof f.status === "number" && f.status !== 200 && blames(f) === "request" ? "request" : "callee")
 
-// A move whose failure blames the request counts as r 0 for that move's cell only: the selection that made the call,
-// treated, by the walk that wrote the failure; once per selection; never its chain, since it produced nothing. Kept
-// apart from grades(): what closes a request and what lapses never read it, and its key cannot replace a grade's.
+// A move whose failure blames the request counts as r 0 for one cell: the move that chose what was asked. Of a call
+// made for a request row (its selection's from), that is the produce that wrote the request: what the vessel refused is
+// the pointer the request carried, not the act of calling it, so the call's own cell is left as it was (law 12: credit
+// to the cause recorded when the choice was made). Of any other move (a template's run, a call with no request) it is
+// the move itself. Either way: treated, by the walk that wrote the failure; once per failing selection; never a chain,
+// since nothing was produced. Kept apart from grades(): what closes a request and what lapses never read it, and its key
+// cannot replace a grade's.
 export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const byId = new Map(seen.map((r) => [r.id, r]))
   const out = new Map<string, Grade>()
   for (const f of seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.seq <= asOf)) {
     const s = sels.get(String(f.selection_ref))
     if (s === undefined || String(s.arm) !== TREATED || s.writer !== f.writer) continue
     if (blamed(f) !== "request") continue
-    out.set(s.id, { ok: true, r: 0, judged: s.id, key: `fail|${s.id}`, cells: new Set([String(s.cell)]), by: WALK, deadline: false })
+    const asked = s.from === undefined ? undefined : byId.get(String(s.from))
+    const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
+    const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s
+    out.set(s.id, { ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), by: WALK, deadline: false })
   }
   return [...out.values()]
 }
