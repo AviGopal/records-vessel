@@ -56,6 +56,10 @@ const validate = async (key: string): Promise<string | undefined> => {
 // depth. The primary one is the transport's ingress, which checked the token against its libp2p node's own peer id before
 // forwarding it here.
 let peer: { at: number; id: string } | undefined
+// Whether this records last found its transport's peer id, logged when that changes (a yes or no, never the id or the
+// env value): the one place an operator can see that federation reads are live here, or inert because nothing names
+// the transport or its row is missing.
+let found: boolean | undefined
 
 const transportPeer = async (): Promise<string> => {
   if (peer !== undefined && Date.now() - peer.at < 60_000) {
@@ -73,6 +77,10 @@ const transportPeer = async (): Promise<string> => {
     id = typeof row?.libp2p_peer_id === "string" ? row.libp2p_peer_id : ""
   }
   peer = id === "" ? undefined : { at: Date.now(), id }
+  if (found !== (id !== "")) {
+    found = id !== ""
+    console.log(`[records] federation self peer: ${found ? "present" : "absent"} (transport named: ${TRANSPORT_ID !== "" ? "yes" : "no"})`)
+  }
   return id
 }
 
