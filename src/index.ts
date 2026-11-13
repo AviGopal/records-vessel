@@ -28,6 +28,12 @@ const answer = (status: number, value: unknown): Response => Response.json(value
 
 const HANDLERS = new Map<string, Handler>([
   [RECORD_WRITE, async (p, who) => {
+    // A write from another node is refused until identity marks whose key it is. Taken as a person row it would be an open
+    // request the walk works and a grade the fold counts, and every vessel on the other node holds a key that can obtain
+    // the token. Its declared writer and role are never read. Reads from another node are served like any caller's.
+    if (who.obo === true) {
+      return fail(403, "cross-node writes wait for person marking")
+    }
     if (!who.self) {
       // A gap is a detector's observation on this node. Under a person's key it would be stamped a person row, an open
       // request the walk would work: a forged ask. Only the node's own key writes one.
@@ -65,12 +71,15 @@ const HANDLERS = new Map<string, Handler>([
 ])
 
 const handle = async (req: Request): Promise<Response> => {
-  const who = await authenticate(req)
+  // The body is read before authenticating because an on-behalf-of token is good for one shape only; an unreadable body
+  // still answers 401 to an unauthenticated caller before it answers 400.
+  const body = (await req.json().catch(() => undefined)) as { impulse?: { pointer?: Pointer } } | undefined
+  const who = await authenticate(req, String(body?.impulse?.pointer?.type ?? ""))
   if (!who.ok) {
     return fail(401, "")
   }
   try {
-    const p = ((await req.json()) as { impulse: { pointer: Pointer } }).impulse.pointer
+    const p = (body as { impulse: { pointer: Pointer } }).impulse.pointer
     if (!HANDLERS.has(p.type)) {
       return fail(400, p.type)
     }
