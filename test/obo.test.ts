@@ -118,6 +118,20 @@ describe("records: a federation on-behalf-of token", () => {
     expect(printed).not.toContain(t)
   })
 
+  test("[MUST-FAIL] a remote row's shape cannot forge a journal line or run past 64 characters in the refusal line", async () => {
+    const long = "y".repeat(80)
+    for (const shape of ["x\n[records] forged", long]) {
+      const r = await call(`Bearer ${token(SELF, "record_write")}`, { type: "record_write", row: { shape, text: "x" } })
+      expect(r.status).toBe(403)
+    }
+    await until(() => printed.split("\n").filter((l) => l.startsWith("[records] refused a cross-node write")).length >= 3, "both refusal lines")
+    expect(printed.split("\n").some((l) => l.startsWith("[records] forged"))).toBe(false)
+    for (const l of printed.split("\n").filter((x) => x.startsWith("[records] refused a cross-node write"))) {
+      const shape = /\(shape=(.*)\)$/.exec(l)?.[1] ?? ""
+      expect(shape.length).toBeLessThanOrEqual(64)
+    }
+  })
+
   test("[MUST-FAIL] a token minted for another node, or for another shape, is refused", async () => {
     expect((await call(`Bearer ${token(OTHER, "record_read")}`, { type: "record_read", shape: "note" })).status).toBe(401)
     expect((await call(`Bearer ${token(SELF, "record_write")}`, { type: "record_read", shape: "note" })).status).toBe(401)
