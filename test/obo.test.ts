@@ -29,6 +29,8 @@ let identity: Fake
 let dir: string
 let port: number
 let vessel: ReturnType<typeof run>
+// What records printed, kept as it runs, so a test can read the lines a refusal writes.
+let printed = ""
 
 const call = async (auth: string, pointer: object) => {
   const r = await fetch(`http://127.0.0.1:${port}/v2/impulses/resolve`, {
@@ -74,6 +76,7 @@ beforeAll(async () => {
     METABOB_API_KEY: NODE_KEY,
     FED_VESSEL_ID: TRANSPORT,
   })
+  void (async () => { const d = new TextDecoder(); for await (const c of vessel.stdout as any) printed += d.decode(c, { stream: true }) })()
   await healthy(port)
   await until(() => discovery.seen.some((s) => s.path === "/register"), "/register")
   const w = await call(`ApiKey ${NODE_KEY}`, { type: "record_write", row: { shape: "note", text: "seed" }, writer: "walk-test", role: "walk" })
@@ -104,6 +107,15 @@ describe("records: a federation on-behalf-of token", () => {
       expect([as, r.status, r.body?.failure?.body]).toEqual([as, 403, "cross-node writes wait for person marking"])
     }
     expect((await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape: "outcome" })).body.length).toBe(before)
+  })
+
+  test("[MUST-FAIL] a refused cross-node write is said in records' output, with the shape and never the token", async () => {
+    const t = token(SELF, "record_write")
+    const r = await call(`Bearer ${t}`, { type: "record_write", row: { shape: "note_from_far", text: "x" } })
+    expect(r.status).toBe(403)
+    await until(() => printed.includes("(shape=note_from_far)"), "the refusal line")
+    expect(printed).toContain("[records] refused a cross-node write: cross-node writes wait for person marking (shape=note_from_far)")
+    expect(printed).not.toContain(t)
   })
 
   test("[MUST-FAIL] a token minted for another node, or for another shape, is refused", async () => {

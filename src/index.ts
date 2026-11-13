@@ -32,6 +32,9 @@ const HANDLERS = new Map<string, Handler>([
     // request the walk works and a grade the fold counts, and every vessel on the other node holds a key that can obtain
     // the token. Its declared writer and role are never read. Reads from another node are served like any caller's.
     if (who.obo === true) {
+      // Said where an operator reads it: the transport's ingress cannot tell this 403 from a stored write (the answer has
+      // no top-level error). The shape only, never the caller's key or token.
+      console.log(`[records] refused a cross-node write: cross-node writes wait for person marking (shape=${String(p.row?.shape ?? "").replace(/[^A-Za-z0-9_.:-]/g, "?").slice(0, 64)})`)
       return fail(403, "cross-node writes wait for person marking")
     }
     if (!who.self) {
