@@ -172,11 +172,32 @@ const episodeOf = (root: Row): Row[] => {
   return same.filter((r) => r.seq > since)
 }
 
-const rootRows = (w: string, root: Row): Row[] => {
+// Which of the given rows each of the walk's selections cites, found in one pass over the selections' lists per read.
+// The given rows are every open root's own (its ask, or its gap's rows since the last close), a handful. A selection
+// written before the walk kept only its root carries its whole pool in its lists, so scanning them again for each
+// root made each read cost the number of roots times every list's length.
+const citedBy = (w: string, ids: Set<string>): Map<string, Set<string>> => {
+  const out = new Map<string, Set<string>>()
+  for (const r of rows) {
+    if (r.shape !== SELECTION || r.writer !== w) continue
+    let got: Set<string> | undefined
+    for (const list of [r.pool_refs, r.input_refs]) {
+      if (!Array.isArray(list)) continue
+      for (const id of list) {
+        const k = String(id)
+        if (ids.has(k)) (got ??= new Set()).add(k)
+      }
+    }
+    if (got) out.set(r.id, got)
+  }
+  return out
+}
+
+const rootRows = (w: string, root: Row, cites: Map<string, Set<string>> = citedBy(w, new Set(episodeOf(root).map((r) => r.id)))): Row[] => {
   const mine = rows.filter((r) => MINE.has(r.shape)).filter((r) => r.writer === w)
   const episode = episodeOf(root)
   const ids = new Set(episode.map((r) => r.id))
-  const held = (r: Row): boolean => [r.pool_refs, r.input_refs].flat().map(String).some((id) => ids.has(id))
+  const held = (r: Row): boolean => [...(cites.get(r.id) ?? [])].some((id) => ids.has(id))
   const sels = new Set(mine.filter((r) => r.shape === SELECTION).filter(held).map((r) => r.id))
   const keep = new Set([
     ...episode,
@@ -239,10 +260,11 @@ export const episode = (w: string): Row[] => {
 // A wait is answered by the next person or owner row, which no one writes for a detector's gap: one taken there would
 // hold every root until an unrelated row came. Stated here, where roots are made, so the walk reads it and never needs
 // to know a shape's name.
-export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => ({
-  shared: shared(w),
-  roots: openRoots(w).map((root) => ({ root, rows: rootRows(w, root), awaits: root.shape !== ARM })),
-})
+export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => {
+  const roots = openRoots(w)
+  const cites = citedBy(w, new Set(roots.flatMap((root) => episodeOf(root).map((r) => r.id))))
+  return { shared: shared(w), roots: roots.map((root) => ({ root, rows: rootRows(w, root, cites), awaits: root.shape !== ARM })) }
+}
 
 // Answers the first row scan finds, rescanning on every write. Given a deadline it answers null at that time and
 // withdraws its waker, so a wait that ended empty stops rescanning: one left behind per timed-out wait would rescan
