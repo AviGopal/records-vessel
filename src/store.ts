@@ -219,8 +219,20 @@ const earned = (w: string): (t: Row) => boolean => {
     .flatMap((k) => [byId.get(k.judged)?.input_refs].flat().map(String)))
   const sels = rows.filter((r) => r.shape === SELECTION && r.writer === w)
   const started = new Map(rows.filter((r) => r.shape === HOP && r.writer === w && r.phase === "started").map((r) => [String(r.call_id), String(r.pointer_type)]))
+  // Which selections worked each request a person graded done, found in one pass over the selections' lists (a
+  // selection written before the walk kept only its root carries its whole pool there), not once per template.
+  const byRoot = new Map<string, Set<string>>()
+  for (const s of sels) {
+    for (const id of [s.pool_refs].flat()) {
+      const k = String(id)
+      if (!done.has(k)) continue
+      const set = byRoot.get(k)
+      if (set) set.add(s.id)
+      else byRoot.set(k, new Set([s.id]))
+    }
+  }
   const calledIn = (root: string): string[] => {
-    const held = new Set(sels.filter((s) => [s.pool_refs].flat().map(String).includes(root)).map((s) => s.id))
+    const held = byRoot.get(root) ?? new Set<string>()
     return rows
       .filter((r) => r.shape === HOP && r.writer === w && r.phase === "ended" && (r.kind === "call" || r.kind === "run") && held.has(String(r.selection_ref)))
       .map((r) => started.get(String(r.call_id)) ?? "")

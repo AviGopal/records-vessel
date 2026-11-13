@@ -482,6 +482,25 @@ describe("the walk's episode", () => {
   }
   const sharedIds = async (r: Awaited<ReturnType<typeof fresh>>) => (await r.episodes()).shared.map((x) => x.id)
 
+  test("[MUST-FAIL] a template is earned only by the calls made for the request it was made on, not by another request's calls", async () => {
+    const r = await fresh()
+    await r.arm()
+    // request A is graded done, but nothing it did ran a git_land
+    const a = await r.ask("make the change")
+    const aAnswerSel = await r.select(a.id)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "done", selection_ref: aAnswerSel.id, input_refs: [a.id] }, desc)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [answer.id] })
+    // request B's work did run a git_land
+    const b = await r.ask("another")
+    const bSel = await r.select(b.id)
+    await r.write(NODE_KEY, { shape: "hop", call_id: "cb", phase: "started", kind: "call", pointer_type: "git_land", selection_ref: bSel.id, input_refs: [bSel.id] }, walk)
+    await r.write(NODE_KEY, { shape: "hop", call_id: "cb", phase: "ended", kind: "call", selection_ref: bSel.id, input_refs: [bSel.id] }, walk)
+    // a template made on A that claims a git_land: A never ran one, so it is not earned
+    const tSel = await r.select(a.id)
+    const t = await r.write(NODE_KEY, { shape: "activity_template", sig: { in: ["world_changed"], out: ["answer"] }, calls: [{ shape: "git_land", pointer: {} }], selection_ref: tSel.id, input_refs: [a.id] }, desc)
+    expect((await r.episodes()).shared.map((x) => x.id)).not.toContain(t.id)
+  })
+
   test("a template that replays, in order, calls that ended in a request a person graded done is the walk's to run (a guard)", async () => {
     const r = await fresh()
     const run = await reached(r, 1)
