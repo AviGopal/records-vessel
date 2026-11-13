@@ -349,6 +349,19 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([lifted.id])
   })
 
+  test("[MUST-FAIL] a gap a person judged to have a wrong test (check_runnable false) is no one's work: not a root, until a later row clears it", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const first = await gap(r, "g-wrong", "open")
+    await r.select(first.id) // work done before the mark: a clone, say
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g-wrong", status: "open", check_runnable: false, meta: { check_runnable: false } }, detector)
+    const open = await gap(r, "g-other", "open") // an unmarked gap is unchanged
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([open.id])
+    const cleared = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-wrong", status: "open", meta: {} }, detector) // a later r 1 clears it
+    expect((await r.episodes()).roots.map((x) => x.root.id).sort()).toEqual([cleared.id, open.id].sort())
+    expect(arm.id).toBeDefined()
+  })
+
   test("a person's grade on a gap row neither lifts a hold, closes a gap nor is a root: only a detector's row does (a guard)", async () => {
     const r = await fresh()
     const arm = await r.arm()

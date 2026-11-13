@@ -134,7 +134,13 @@ const openGaps = (from: Row[]): Row[] => {
   // A gap held by a person (operator_hold on its latest row, kept in its meta by the detector) is no one's work until
   // the hold lifts: it is not a root.
   const held = (r: Row): boolean => r.operator_hold === true || (r.meta as { operator_hold?: unknown } | undefined)?.operator_hold === true
-  return [...latest.values()].filter((r) => r.status === "open" && !held(r))
+  // A gap a person judged to have a wrong test (check_runnable false on its latest row, written by the detector's
+  // release from that person's r 0) is no one's work here either: a change must not edit the check that verifies it, so
+  // nothing the walk could do on it is allowed, not a clone, an edit, a commit or a landing in a clone made before. The
+  // test is fixed by a reviewed commit to the vessel, and the detector closes the gap once it passes. A later r 1
+  // clears the mark, and the gap is a root again.
+  const notRunnable = (r: Row): boolean => r.check_runnable === false || (r.meta as { check_runnable?: unknown } | undefined)?.check_runnable === false
+  return [...latest.values()].filter((r) => r.status === "open" && !held(r) && !notRunnable(r))
 }
 
 // A row that carries a verdict (r 0 or 1 on rows it cites) judges something: it is a grade, whatever its shape, not a
