@@ -15,9 +15,10 @@ const SELF = "12D3KooWSelfPlaceholderPeer"
 const OTHER = "12D3KooWOtherPlaceholderPeer"
 
 // identity's state: each token it minted, with its audience, caller key id and whether it has expired.
-const tokens = new Map<string, { node: string; shape: string; keyId: string; expired?: boolean; session?: boolean }>()
+// lies: identity answers this binding whatever audience was asked (records must check the answer itself).
+const tokens = new Map<string, { node: string; shape: string; keyId: string; expired?: boolean; session?: boolean; lies?: { node: string; shape: string } }>()
 let n = 0
-const token = (node: string, shape: string, extra: { expired?: boolean; session?: boolean; keyId?: string } = {}): string => {
+const token = (node: string, shape: string, extra: { expired?: boolean; session?: boolean; keyId?: string; lies?: { node: string; shape: string } } = {}): string => {
   const t = `obo-placeholder-${++n}`
   tokens.set(t, { node, shape, keyId: extra.keyId ?? "kid-caller", ...extra })
   return t
@@ -57,6 +58,7 @@ beforeAll(async () => {
     const t = tokens.get(String(p.token ?? ""))
     if (p.type !== "session" || t === undefined || t.expired) return Response.json({ success: false }, { status: 401 })
     if (t.session) return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId } })
+    if (t.lies) return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId, obo: t.lies } })
     if (p.audience?.node !== t.node || p.audience?.shape !== t.shape) return Response.json({ success: false }, { status: 401 })
     return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId, obo: { node: t.node, shape: t.shape } } })
   })
@@ -109,6 +111,13 @@ describe("records: a federation on-behalf-of token", () => {
     expect((await call(`Bearer ${token(SELF, "record_write")}`, { type: "record_read", shape: "note" })).status).toBe(401)
   })
 
+  test("[MUST-FAIL] records checks identity's answer itself: a binding for another shape or another node is refused", async () => {
+    for (const lies of [{ node: SELF, shape: "record_write" }, { node: OTHER, shape: "record_read" }]) {
+      const r = await call(`Bearer ${token(SELF, "record_read", { lies })}`, { type: "record_read", shape: "note" })
+      expect([lies, r.status]).toEqual([lies, 401])
+    }
+  })
+
   test("[MUST-FAIL] a session token identity accepts, with no on-behalf-of binding, is refused", async () => {
     expect((await call(`Bearer ${token(SELF, "record_read", { session: true })}`, { type: "record_read", shape: "note" })).status).toBe(401)
   })
@@ -140,11 +149,14 @@ describe("records with no federation transport named", () => {
   afterAll(() => { other?.kill(); rmSync(d2, { recursive: true, force: true }) })
   test("[MUST-FAIL] every token is refused, for any transport local discovery lists: there is no node it was minted for", async () => {
     for (const node of [SELF, OTHER]) {
+      const t = token(node, "record_read")
       const r = await fetch(`http://127.0.0.1:${p2}/v2/impulses/resolve`, {
-        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token(node, "record_read")}` },
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}` },
         body: JSON.stringify({ impulse: { pointer: { type: "record_read", shape: "note" } } }),
       })
       expect([node, r.status]).toEqual([node, 401])
+      // Refused before identity is asked: there is no node to state as the audience.
+      expect([node, identity.seen.filter((x) => (x.body as any)?.impulse?.pointer?.token === t).length]).toEqual([node, 0])
     }
   })
 })
