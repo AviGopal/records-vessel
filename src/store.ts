@@ -153,12 +153,27 @@ const openRoots = (w: string): Row[] => {
 
 // The rows descended from one root: it, the walk's selections whose pool held it, their hops and failures, the
 // described rows those selections made, and the rows the walk recorded from a tool's answer for them (a gitDiff).
+// A gap's root is its gap_id, not one row of it: a detector that writes the gap again while it stays open (a field
+// carried, a summary changed, a hold lifted) speaks for the same work. Its episode is every detector row of that gap_id
+// since its last closed row, and the work that cited any of them, so writing the row again never restarts the walk on
+// it. The latest row is the root and says what the gap is now (status, repo, hold). A gap closed and opened again
+// starts a new episode.
+const episodeOf = (root: Row): Row[] => {
+  if (root.shape !== GAP || root.role !== DETECTOR || root.gap_id === undefined) return [root]
+  const same = rows.filter((r) => r.shape === GAP && r.role === DETECTOR && String(r.gap_id) === String(root.gap_id) && r.seq <= root.seq)
+    .sort((a, b) => a.seq - b.seq)
+  const since = same.filter((r) => r.status !== "open").at(-1)?.seq ?? 0
+  return same.filter((r) => r.seq > since)
+}
+
 const rootRows = (w: string, root: Row): Row[] => {
   const mine = rows.filter((r) => MINE.has(r.shape)).filter((r) => r.writer === w)
-  const held = (r: Row): boolean => [r.pool_refs, r.input_refs].flat().map(String).includes(root.id)
+  const episode = episodeOf(root)
+  const ids = new Set(episode.map((r) => r.id))
+  const held = (r: Row): boolean => [r.pool_refs, r.input_refs].flat().map(String).some((id) => ids.has(id))
   const sels = new Set(mine.filter((r) => r.shape === SELECTION).filter(held).map((r) => r.id))
   const keep = new Set([
-    root,
+    ...episode,
     ...mine.filter((r) => sels.has(r.shape === SELECTION ? r.id : String(r.selection_ref))),
     ...rows.filter((r) => r.role === DESCRIBED).filter((r) => r.shape !== ACTIVITY_TEMPLATE).filter((r) => sels.has(String(r.selection_ref))),
     ...rows.filter((r) => r.role === WALK && r.writer === w).filter((r) => !MINE.has(r.shape)).filter((r) => sels.has(String(r.selection_ref))),

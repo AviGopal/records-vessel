@@ -304,6 +304,41 @@ describe("the walk's episode", () => {
     expect(all.roots[0].rows.map((x) => x.id)).toEqual([g.id, sel.id])
   })
 
+  test("[MUST-FAIL] a gap written again while open is the same root: its earlier rows and the work on them stay in its episode", async () => {
+    const r = await fresh()
+    await r.arm()
+    const first = await gap(r, "g1", "open")
+    const work = await r.select(first.id)
+    const again = await r.write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "open", summary: "a check fails", repo: "x" }, detector)
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([again.id]) // the latest row speaks for the gap
+    const ids = all.roots[0].rows.map((x) => x.id)
+    expect(ids).toContain(work.id) // the work done on the earlier row is not lost
+    expect(ids).toContain(first.id)
+  })
+
+  test("a gap closed and opened again starts a new episode (a guard): the work before its close is not carried", async () => {
+    const r = await fresh()
+    await r.arm()
+    const first = await gap(r, "g1", "open")
+    const before = await r.select(first.id)
+    await gap(r, "g1", "closed")
+    const reopened = await gap(r, "g1", "open")
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([reopened.id])
+    expect(all.roots[0].rows.map((x) => x.id)).not.toContain(before.id)
+    expect(all.roots[0].rows.map((x) => x.id)).not.toContain(first.id)
+  })
+
+  test("a hold on the latest row holds the whole gap (a guard): the earlier rows' work does not make it a root", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const first = await gap(r, "g1", "open")
+    await r.select(first.id)
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "open", meta: { operator_hold: true } }, detector)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
+  })
+
   test("[MUST-FAIL] a gap a person holds is no one's work: not a root while held, a root again once a later row lifts it", async () => {
     const r = await fresh()
     const arm = await r.arm()
