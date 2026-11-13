@@ -10,7 +10,84 @@ const GRADERS = new Set([DESCRIBED, PERSON])
 // by: the grader's role (person, or described for the walk's own outcome); deadline: the judged row is a deadline, so
 // a counted grade of it at r 0 is a lapse.
 // refused: why a grade does not count, when it does not (the first reason that applies).
-export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string>; by: string; deadline: boolean; refused?: string }
+export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string>; weights: Map<string, number>; by: string; deadline: boolean; refused?: string }
+
+// What the owner's credits row for target "selection" says about how credit travels: the weight each kind of
+// origination carries, the discount per consumption edge (gamma) and how far it goes (depth). Until the owner writes
+// the row, the seeded values (design: enablement-credit section 1).
+export type Travel = { w_person: number; w_lapse: number; w_close: number; gamma: number; depth: number }
+const SEEDED: Travel = { w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12 }
+const travelOf = (seen: Row[]): Travel => {
+  const row = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === SELECTION).sort((a, b) => a.seq - b.seq).at(-1)
+  const num = (k: keyof Travel, lo: number, hi: number): number => {
+    const v = Number(row?.[k])
+    return Number.isFinite(v) && v >= lo && v <= hi ? v : SEEDED[k]
+  }
+  return { w_person: num("w_person", 0, 10), w_lapse: num("w_lapse", 0, 10), w_close: num("w_close", 0, 10), gamma: num("gamma", 0, 1), depth: Math.floor(num("depth", 0, 64)) }
+}
+
+const shapeOf = (e: unknown): string => typeof e === "object" && e !== null ? String((e as { shape?: unknown }).shape) : String(e)
+
+// The selections a success reached, each once, at the weight of its shortest path. A selection consumed a row when:
+// the row is of one of its produce's schema input shapes and in the produced row's input_refs; or the produced row
+// names it in uses (and it was among the rows shown, input_refs); or the selection is a call and the row is its
+// request (from); or it is a run and the row is its template. Credit passes from a selection to the selection that
+// produced each row it consumed (that row's selection_ref). A row the producer was only shown, and did not name in
+// uses, passes nothing: presence in a pool is not use. Every edge runs to a selection with a lower seq, so the walk
+// ends.
+// The rows reached() walks, indexed once per fold, not once per grade: what is by id, which rows are selections, what
+// each selection produced, and each target's schema input shapes.
+export type Index = { byId: Map<string, Row>; sels: Map<string, Row>; made: Map<string, Row[]>; inputs: Map<string, Set<string>> }
+export const indexOf = (seen: Row[]): Index => {
+  const byId = new Map(seen.map((r) => [r.id, r]))
+  const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const made = new Map<string, Row[]>()
+  for (const r of seen) {
+    if (typeof r.selection_ref !== "string" || r.role !== DESCRIBED || r.shape === OUTCOME) continue
+    const list = made.get(r.selection_ref)
+    if (list) list.push(r)
+    else made.set(r.selection_ref, [r])
+  }
+  const inputs = new Map<string, Set<string>>()
+  for (const s of seen.filter((r) => r.shape === SHAPE_SCHEMA && r.role === OWNER)) {
+    const k = String(s.target)
+    inputs.set(k, new Set([...(inputs.get(k) ?? []), ...[s.inputs ?? []].flat().map(shapeOf)]))
+  }
+  return { byId, sels, made, inputs }
+}
+
+export const reached = (index: Index, start: string, t: Travel): Map<string, number> => {
+  const { byId, sels, made, inputs } = index
+  const consumed = (sel: Row): string[] => {
+    const a = String(sel.a ?? "")
+    if (a.startsWith("call/")) return sel.from === undefined ? [] : [String(sel.from)]
+    if (a.startsWith("run/")) return [a.slice("run/".length)]
+    return (made.get(sel.id) ?? []).flatMap((p) => {
+      const shown = new Set([p.input_refs].flat().map(String))
+      const ins = inputs.get(String(p.shape)) ?? new Set<string>()
+      const asInput = [...shown].filter((id) => ins.has(String(byId.get(id)?.shape)))
+      const used = [p.uses ?? []].flat().map(String).filter((id) => shown.has(id))
+      return [...asInput, ...used]
+    })
+  }
+  const out = new Map<string, number>()
+  const seenSel = new Set<string>([start])
+  let level = [start]
+  for (let k = 0; level.length > 0 && k <= t.depth; k++) {
+    const next: string[] = []
+    for (const id of level) {
+      out.set(id, Math.pow(t.gamma, k))
+      const sel = sels.get(id)
+      if (sel === undefined) continue
+      for (const x of consumed(sel)) {
+        const p = byId.get(x)?.selection_ref
+        if (typeof p === "string" && sels.has(p) && !seenSel.has(p) && (sels.get(p)?.seq ?? Infinity) < sel.seq) { seenSel.add(p); next.push(p) }
+      }
+    }
+    level = next
+  }
+  return out
+}
 
 // Every grade among the rows, with whether it counts and what it judges. The fold folds the ones that count; the
 // lapse detector uses the same answer, so a grade the fold refuses never hides a lapse.
@@ -52,6 +129,9 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     return r.shape === String(shape) && Object.entries(where ?? {}).every(([k, v]) => Array.isArray(v) ? v.includes(r[k]) : r[k] === v)
   }
   const gradable = (r: Row): boolean => entries === undefined || entries.some((e) => matches(r, e))
+  const travel = travelOf(seen)
+  let index: Index | undefined
+  const idx = (): Index => (index ??= indexOf(seen))
   const given = (r: Row): boolean => (entries ?? []).some((e) => typeof e === "object" && e !== null && "where" in e && matches(r, e))
   const credit = (o: Row): Grade => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
@@ -78,9 +158,17 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       : !timely ? "untimely"
       : undefined
     const ok = refused === undefined
-    const after = deadline ? [sels.get(String(o.selection_ref))?.pool_refs].flat().map((id) => sels.get(String(id))).filter((x) => x !== undefined && x.seq > Number(j?.seq)) : []
-    const chain = ok && s !== undefined ? [s, ...[s.pool_refs].flat().map((id) => sels.get(String(id))), ...after] : []
-    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(chain.filter((x) => x !== undefined && treated(x.id) && !failed.has(x.id)).map((x) => String(x?.cell))), by: String(o.role), deadline, ...(refused ? { refused } : {}) }
+    // What it credits: the selection that made the judged row, and every selection whose output that one consumed,
+    // back along consumption (reached), each once at w·gamma^k for its shortest distance k. Never the pool it saw.
+    const weights = new Map<string, number>()
+    if (ok && s !== undefined) {
+      for (const [id, g] of reached(idx(), s.id, travel)) {
+        if (!treated(id) || failed.has(id)) continue
+        const c = String(sels.get(id)?.cell)
+        weights.set(c, Math.max(weights.get(c) ?? 0, g))
+      }
+    }
+    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(weights.keys()), weights, by: String(o.role), deadline, ...(refused ? { refused } : {}) }
   }
   return seen
     .filter((r) => r.shape === OUTCOME)
@@ -146,7 +234,7 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
     const asked = s.from === undefined ? undefined : byId.get(String(s.from))
     const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
     const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s
-    out.set(s.id, { ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), by: WALK, deadline: false })
+    out.set(s.id, { ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), weights: new Map([[String(chose.cell), 1]]), by: WALK, deadline: false })
   }
   return [...out.values()]
 }
@@ -192,6 +280,7 @@ export const gapClosures = (all: Row[], asOf: number, atSeq: number): Grade[] =>
         const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
         out.push({
           ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
+          weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),
           by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
         })
       }
@@ -214,7 +303,14 @@ const asker = (c: string): string | undefined => c.split("|").slice(1).join("|")
 export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
   const closures = gapClosures(all, asOf, atSeq).filter((k) => k.ok)
-  const latest = [...new Map([...standing(all, asOf, atSeq), ...moveFailures(all, asOf, atSeq), ...closures].map((k) => [k.key, k])).values()]
+  // Credit originates only at a person's verdict or a lapse (r 0 on a passed deadline, however records wrote it, the
+  // walk's own lapse rows included), each at its owner weight, and at a closure. The walk's own described grade of its
+  // answer is a model judging an outcome: it stays a row (closing and lapse detection read it) but originates nothing.
+  const t = travelOf(all.filter((r) => r.seq <= atSeq))
+  const scale = (k: Grade, w: number): Grade => ({ ...k, weights: new Map([...k.weights].map(([c, g]) => [c, g * w])) })
+  const originated = standing(all, asOf, atSeq).flatMap((k) =>
+    k.deadline && k.r === 0 ? [scale(k, t.w_lapse)] : k.by === PERSON ? [scale(k, t.w_person)] : [])
+  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures].map((k) => [k.key, k])).values()]
   return cells.map((c) => {
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],
@@ -227,8 +323,10 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     const p0 = priors
       .filter((r) => String(r.cell) === c)
       .reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
-    const wins = counted.reduce((s, k) => s + k.r, 0)
-    const losses = counted.reduce((s, k) => s + (1 - k.r), 0)
+    // Each grade's weight at this level: its largest weight on a cell this level matches.
+    const w = (k: Grade): number => Math.max(0, ...[...k.weights].filter(([x]) => levels.find(([l]) => l === from)![1](x)).map(([, g]) => g))
+    const wins = counted.reduce((s, k) => s + k.r * w(k), 0)
+    const losses = counted.reduce((s, k) => s + (1 - k.r) * w(k), 0)
     return { cell: c, alpha: p0.alpha + wins, beta: p0.beta + losses, from }
   })
 }

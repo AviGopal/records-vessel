@@ -27,21 +27,28 @@ describe("posterior fold", () => {
   const moved = { alpha: 2, beta: 1 }
   const still = { alpha: 1, beta: 1 }
 
-  test("a clean grade credits the answer's cell and the earlier steps of its composition, even from the same model", () => {
+  test("[MUST-FAIL] the walk's own described grade of an answer originates no credit, though it still counts as a grade", () => {
     const g = grade({})
-    expect(post([g], "c")).toEqual({ cell: "c", ...moved })
-    expect(post([g], "step")).toEqual({ cell: "step", ...moved })
-    expect(post([g], "judge")).toEqual({ cell: "judge", ...still })
+    expect(post([g], "c")).toEqual({ cell: "c", ...still })
+    expect(post([g], "step")).toEqual({ cell: "step", ...still })
+    expect(F.grades([...base, g], seq, seq).at(-1)).toMatchObject({ ok: true }) // closing and lapses still read it
   })
 
-  test("a person's verdict citing the answer credits the same composition", () => {
+  test("[MUST-FAIL] a person's verdict credits the answer's cell, and an earlier step only through what the answer consumed", () => {
     expect(post([verdict({})], "c")).toEqual({ cell: "c", ...moved })
-    expect(post([verdict({})], "step")).toEqual({ cell: "step", ...moved })
+    expect(post([verdict({})], "step")).toEqual({ cell: "step", ...still }) // in the pool, never consumed: nothing
     expect(post([verdict({ r: 0 })], "c")).toEqual({ cell: "c", alpha: 1, beta: 2 })
+    const draft = row("hop", "walk", { selection_ref: stepSel.id, output: { text: "draft" } })
+    const used = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, draft.id], uses: [draft.id] })
+    const v = row("outcome", "person", { r: 1, input_refs: [used.id] })
+    expect(fold([...base, draft, used, v], ["step"], seq, seq)[0]).toEqual({ cell: "step", alpha: 1.7, beta: 1 }) // one edge: w·0.7
+    const shownOnly = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, draft.id] })
+    const v2 = row("outcome", "person", { r: 1, input_refs: [shownOnly.id] })
+    expect(fold([...base, draft, shownOnly, v2], ["step"], seq, seq)[0]).toEqual({ cell: "step", ...still }) // shown, not in uses
   })
 
   test("the cell comes from the answer, not from a cell copied onto the grade", () => {
-    expect(post([grade({ cell: "mis-copied" })], "c")).toEqual({ cell: "c", ...moved })
+    expect(post([verdict({ cell: "mis-copied" })], "c")).toEqual({ cell: "c", ...moved })
   })
 
   test("a described grade that saw the walk's own rows does not count", () => {
@@ -51,13 +58,15 @@ describe("posterior fold", () => {
   test("a described grade that saw another grade does not count", () => {
     const earlier = grade({})
     const later = grade({ r: 0, input_refs: [ask.id, answer.id, earlier.id] })
-    expect(post([earlier, later], "c")).toEqual({ cell: "c", ...moved })
+    const gs = F.grades([...base, earlier, later], seq, seq)
+    expect(gs.at(-2)).toMatchObject({ ok: true })
+    expect(gs.at(-1)).toMatchObject({ ok: false, refused: "unclean" })
   })
 
   test("a grade that saw several answers judges the one its evidence_refs names", () => {
     const two = [ask.id, answer.id, otherAnswer.id]
-    expect(post([grade({ input_refs: two, evidence_refs: [answer.id] })], "c")).toEqual({ cell: "c", ...moved })
-    expect(post([grade({ input_refs: two, evidence_refs: ["not-seen"] })], "c")).toEqual({ cell: "c", ...still })
+    expect(F.grades([...base, grade({ input_refs: two, evidence_refs: [answer.id] })], seq, seq).at(-1)).toMatchObject({ ok: true, judged: answer.id })
+    expect(F.grades([...base, grade({ input_refs: two, evidence_refs: ["not-seen"] })], seq, seq).at(-1)).toMatchObject({ ok: false })
     expect(post([verdict({ input_refs: [answer.id, otherAnswer.id], evidence_refs: [answer.id] })], "c")).toEqual({ cell: "c", ...moved })
   })
 
@@ -99,7 +108,7 @@ describe("posterior fold", () => {
     expect(post([first, someoneElse], "c")).toEqual({ cell: "c", alpha: 3, beta: 1 })
   })
 
-  test("a lapsed deadline counts only as r 0, only after its time, and credits the waits that let it lapse", () => {
+  test("[MUST-FAIL] a lapse, though the walk wrote it, originates r 0 at w_lapse along consumption, only after its time; the waits after it are not debited", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id, stepSel.id] })
     const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
     const waitSel = row("selection", "walk", { arm: "treated", cell: "wait-cell" })
@@ -111,8 +120,10 @@ describe("posterior fold", () => {
     const at = (g: Row, cell: string) => fold([...base, ...rows, g], [cell], seq, seq)[0]
     const late = lapse({})
     expect(at(late, "due-cell")).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
-    expect(at(late, "step")).toEqual({ cell: "step", alpha: 1, beta: 2 })
-    expect(at(late, "wait-cell")).toEqual({ cell: "wait-cell", alpha: 1, beta: 2 })
+    expect(at(late, "step")).toEqual({ cell: "step", ...still }) // in the due's pool, not consumed
+    expect(at(late, "wait-cell")).toEqual({ cell: "wait-cell", ...still }) // the rule for waits after a deadline is gone
+    const heavier = row("credits", "owner", { target: "selection", w_lapse: 3 })
+    expect(fold([...base, ...rows, heavier, late], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 4 })
     expect(at(lapse({ t: "2026-11-10T09:59:00Z" }), "due-cell")).toEqual({ cell: "due-cell", ...still })
     expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", ...still })
   })
@@ -146,7 +157,7 @@ describe("posterior fold", () => {
     const [, ce] = callHops("call", "c1")
     const [, re] = callHops("run", "r1")
     const g = grade({ input_refs: [ask.id, answer.id, ce.id, re.id] })
-    expect(post([ce, re, outcomeSchema(["answer", "due", toolOutputs]), g], "c")).toEqual({ cell: "c", ...moved })
+    expect(F.grades([...base, ce, re, outcomeSchema(["answer", "due", toolOutputs]), g], seq, seq).at(-1)).toMatchObject({ ok: true })
   })
 
   test("(A) a produce or wait hop, or a call's started hop, still leaves the grade unclean (a guard)", () => {
@@ -184,9 +195,9 @@ describe("posterior fold", () => {
   test("[MUST-FAIL] (B) what a grade may judge is read from the owner's newest outcome schema: another described row it saw makes it unclean", () => {
     const wanted = row("change_wanted", "described", { wanted: false, input_refs: [ask.id] })
     const g = grade({ input_refs: [ask.id, answer.id, wanted.id], evidence_refs: [answer.id] })
-    expect(post([wanted, outcomeSchema(["world_changed", "answer", "due"]), g], "c")).toEqual({ cell: "c", ...still })
+    expect(F.grades([...base, wanted, outcomeSchema(["world_changed", "answer", "due"]), g], seq, seq).at(-1)).toMatchObject({ ok: false, refused: "unclean" })
     // the newest schema row is the one read: one naming change_wanted as context lets the same grade count (a guard)
-    expect(post([wanted, outcomeSchema(["world_changed", "answer", "due"]), outcomeSchema(["answer", "change_wanted"]), g], "c")).toEqual({ cell: "c", ...moved })
+    expect(F.grades([...base, wanted, outcomeSchema(["world_changed", "answer", "due"]), outcomeSchema(["answer", "change_wanted"]), g], seq, seq).at(-1)).toMatchObject({ ok: true })
   })
 
   test("[MUST-FAIL] the walk's grades are tallied: written and counted, answers and lapses apart, and why the rest were refused", () => {
@@ -277,17 +288,20 @@ describe("a step whose move failed", () => {
   const okStep = row("selection", "walk", { arm: "treated", cell: "ok-step" })
   const badStep = row("selection", "walk", { arm: "treated", cell: "bad-step" })
   const answerSel = row("selection", "walk", { arm: "treated", cell: "answer-cell", pool_refs: [ask.id, okStep.id, badStep.id] })
-  const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id] })
+  // Each step made a row the answer used (uses), so a verdict on the answer reaches both steps, one edge away (w·0.7).
+  const okOut = row("hop", "walk", { selection_ref: okStep.id, output: { text: "ok" } })
+  const badOut = row("hop", "walk", { selection_ref: badStep.id, output: { text: "bad" } })
+  const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, okOut.id, badOut.id], uses: [okOut.id, badOut.id] })
   const verdict = (r: number) => row("outcome", "person", { r, input_refs: [answer.id] })
   const failOf = (s: Row, fields: Record<string, unknown>) => row("failure", "walk", { selection_ref: s.id, status: 500, body: "x", ...fields })
-  const post = (rows: Row[], cell: string) => fold([ask, okStep, badStep, answerSel, answer, ...rows], [cell], seq, seq)[0]
+  const post = (rows: Row[], cell: string) => fold([ask, okStep, badStep, answerSel, okOut, badOut, answer, ...rows], [cell], seq, seq)[0]
 
   test("[MUST-FAIL] (a) a step that failed with a 500 gets no credit from a grade of the answer it preceded", () => {
     expect(post([failOf(badStep, {}), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 1, beta: 1 })
   })
 
   test("(b) a skip row names a template, not the move it was written beside: that step keeps its credit (a pin)", () => {
-    expect(post([failOf(badStep, { kind: "skip", status: undefined }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 2, beta: 1 })
+    expect(post([failOf(badStep, { kind: "skip", status: undefined }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 1.7, beta: 1 })
   })
 
   test("[MUST-FAIL] (c) a step that failed with a 422 gets only that failure's r 0, never the answer's credit", () => {
@@ -302,21 +316,22 @@ describe("a step whose move failed", () => {
 
   test("(e) a sibling step with no failure, and the answer's own selection, are still credited (a guard)", () => {
     const rows = [failOf(badStep, {}), verdict(1)]
-    expect(post(rows, "ok-step")).toEqual({ cell: "ok-step", alpha: 2, beta: 1 })
+    expect(post(rows, "ok-step")).toEqual({ cell: "ok-step", alpha: 1.7, beta: 1 })
     expect(post(rows, "answer-cell")).toEqual({ cell: "answer-cell", alpha: 2, beta: 1 })
   })
 
   test("(f) a failure row another writer wrote does not remove the step (a guard)", () => {
-    expect(post([failOf(badStep, { writer: "someone-else" }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 2, beta: 1 })
+    expect(post([failOf(badStep, { writer: "someone-else" }), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 1.7, beta: 1 })
   })
 
-  test("(g) a lapse still debits the waits after the deadline (a guard: only failed steps leave the chain)", () => {
+  test("(g) a lapse no longer debits the waits after the deadline: it travels only along what was consumed", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
     const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
     const waitSel = row("selection", "walk", { arm: "treated", cell: "wait-cell" })
     const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id, waitSel.id] })
     const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
-    expect(fold([ask, dueSel, due, waitSel, graderSel, lapse], ["wait-cell"], seq, seq)[0]).toEqual({ cell: "wait-cell", alpha: 1, beta: 2 })
+    expect(fold([ask, dueSel, due, waitSel, graderSel, lapse], ["wait-cell"], seq, seq)[0]).toEqual({ cell: "wait-cell", alpha: 1, beta: 1 })
+    expect(fold([ask, dueSel, due, waitSel, graderSel, lapse], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
   })
 })
 
@@ -438,3 +453,66 @@ describe("a detector closing a gap", () => {
   })
 })
 
+
+describe("credit travels along consumption", () => {
+  const ask = row("world_changed", "person", { what: "q" })
+  const sel = (cell: string, fields: Record<string, unknown> = {}) => row("selection", "walk", { arm: "treated", cell, ...fields })
+  const out = (s: Row, fields: Record<string, unknown> = {}) => row("hop", "walk", { selection_ref: s.id, output: {}, ...fields })
+  const at = (rows: Row[], cell: string) => fold(rows, [cell], seq, seq)[0]
+
+  test("[MUST-FAIL] a diamond credits the shared ancestor once, at its shortest distance, never once per path", () => {
+    const root = sel("root-step")
+    const rootOut = out(root)
+    const left = sel("left", { a: "produce/x/ch" })
+    const leftRow = row("note", "described", { selection_ref: left.id, input_refs: [rootOut.id], uses: [rootOut.id] })
+    const right = sel("right", { a: "produce/x/ch" })
+    const rightRow = row("note", "described", { selection_ref: right.id, input_refs: [rootOut.id], uses: [rootOut.id] })
+    const answerSel = sel("answer-cell")
+    const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, leftRow.id, rightRow.id], uses: [leftRow.id, rightRow.id] })
+    const v = row("outcome", "person", { r: 1, input_refs: [answer.id] })
+    const rows = [ask, root, rootOut, left, leftRow, right, rightRow, answerSel, answer, v]
+    expect(at(rows, "left")).toEqual({ cell: "left", alpha: 1.7, beta: 1 })
+    expect(at(rows, "right")).toEqual({ cell: "right", alpha: 1.7, beta: 1 })
+    const shared = at(rows, "root-step")
+    expect(shared.alpha).toBeCloseTo(1 + 0.49, 10) // once, at depth 2: 0.7², not 0.49 + 0.49
+    expect(shared.beta).toBe(1)
+  })
+
+  test("[MUST-FAIL] a call passes credit to the produce that wrote its request, and nothing passes beyond the owner's depth", () => {
+    const reqSel = sel("request-produce", { a: "produce/request/ch" })
+    const request = row("request", "described", { selection_ref: reqSel.id, input_refs: [ask.id], pointer: { type: "fs_read" } })
+    const callSel = sel("call-cell", { a: "call/fs_read", from: request.id })
+    const callOut = out(callSel)
+    const answerSel = sel("answer-cell")
+    const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, callOut.id], uses: [callOut.id] })
+    const v = row("outcome", "person", { r: 1, input_refs: [answer.id] })
+    const rows = [ask, reqSel, request, callSel, callOut, answerSel, answer, v]
+    expect(at(rows, "call-cell")).toEqual({ cell: "call-cell", alpha: 1.7, beta: 1 })
+    expect(at(rows, "request-produce").alpha).toBeCloseTo(1.49, 10)
+    const shallow = row("credits", "owner", { target: "selection", depth: 1 })
+    expect(at([...rows, shallow], "call-cell")).toEqual({ cell: "call-cell", alpha: 1.7, beta: 1 })
+    expect(at([...rows, shallow], "request-produce")).toEqual({ cell: "request-produce", alpha: 1, beta: 1 })
+  })
+
+  test("[MUST-FAIL] a cell whose calls end but are never consumed keeps its prior: ending earns nothing", () => {
+    const callSel = sel("busy-call", { a: "call/fs_read" })
+    const started = row("hop", "walk", { selection_ref: callSel.id, phase: "started", call_id: "k1", pointer_type: "fs_read" })
+    const ended = row("hop", "walk", { selection_ref: callSel.id, phase: "ended", call_id: "k1", output: { text: "x" } })
+    const answerSel = sel("answer-cell")
+    const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, ended.id] }) // shown, not used
+    const v = row("outcome", "person", { r: 1, input_refs: [answer.id] })
+    expect(at([ask, callSel, started, ended, answerSel, answer, v], "busy-call")).toEqual({ cell: "busy-call", alpha: 1, beta: 1 })
+  })
+
+  test("[MUST-FAIL] the walk's own lapse row originates r 0 at w_lapse, and its own non-lapse grade nothing (keyed on the lapse, not the role)", () => {
+    const dueSel = sel("due-cell")
+    const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    const graderSel = sel("judge")
+    const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
+    expect(at([ask, dueSel, due, graderSel, lapse], "due-cell")).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
+    const answerSel = sel("answer-cell")
+    const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id] })
+    const own = row("outcome", "described", { r: 1, selection_ref: graderSel.id, input_refs: [ask.id, answer.id] })
+    expect(at([ask, graderSel, answerSel, answer, own], "answer-cell")).toEqual({ cell: "answer-cell", alpha: 1, beta: 1 })
+  })
+})
