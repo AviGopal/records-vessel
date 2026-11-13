@@ -127,6 +127,22 @@ describe("records vessel", () => {
     expect((await write(NODE_KEY, { shape: "answer", selection_ref: sel.body.id }, as)).status).toBe(200)
   })
 
+  test("[MUST-FAIL] latest_by answers the latest row of each value, before where: a gap closed since shows nothing", async () => {
+    const det = { writer: "pull-sync", role: "detector" }
+    const gap = (gap_id: string, status: string) => write(NODE_KEY, { shape: "gap", gap_id, status, summary: "s" }, det)
+    await gap("lb-closed", "open")
+    await gap("lb-closed", "open")
+    await gap("lb-closed", "closed")
+    await gap("lb-open", "open")
+    const newest = (await gap("lb-open", "open")).body
+    const got = (await call(NODE_KEY, { type: "record_read", shape: "gap", latest_by: "gap_id", where: { status: "open" } })).body as Array<{ id: string; gap_id: string }>
+    const mine = got.filter((r) => String(r.gap_id).startsWith("lb-"))
+    expect(mine.map((r) => [r.gap_id, r.id])).toEqual([["lb-open", newest.id]])
+    // without latest_by the read is as before: every open row of both gaps
+    const all = (await call(NODE_KEY, { type: "record_read", shape: "gap", where: { status: "open" } })).body as Array<{ gap_id: string }>
+    expect(all.filter((r) => String(r.gap_id).startsWith("lb-")).length).toBe(4)
+  })
+
   test("rows are appended to the data dir and read back in seq order", async () => {
     const lines = readFileSync(join(dir, "rows"), "utf-8").trim().split("\n").map((l) => JSON.parse(l))
     expect(lines.length).toBeGreaterThan(0)

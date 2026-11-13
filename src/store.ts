@@ -17,6 +17,7 @@ export type Query = {
   episode?: string
   roots?: string
   calls?: string[]
+  latest_by?: string
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS])
@@ -78,6 +79,14 @@ export const read = (q: Query): Row[] => {
   if (q.after_seq !== undefined) {
     const n = Number(q.after_seq)
     out = out.filter((r) => r.seq > n)
+  }
+  // The latest row of each value of a field (a gap's gap_id): what each one stands at now. Kept before where, so a thing
+  // whose latest row no longer matches (a gap closed since) shows nothing, not an older row that once matched.
+  if (q.latest_by !== undefined) {
+    const key = String(q.latest_by)
+    const latest = new Map<string, Row>()
+    for (const r of out.filter((x) => x[key] !== undefined)) latest.set(String(r[key]), r)
+    out = [...latest.values()].sort((a, b) => a.seq - b.seq)
   }
   if (q.refs_to !== undefined) {
     const s = String(q.refs_to)
