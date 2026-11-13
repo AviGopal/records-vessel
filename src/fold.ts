@@ -13,17 +13,28 @@ const GRADERS = new Set([DESCRIBED, PERSON])
 export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string>; weights: Map<string, number>; by: string; deadline: boolean; refused?: string }
 
 // What the owner's credits row for target "selection" says about how credit travels: the weight each kind of
-// origination carries, the discount per consumption edge (gamma) and how far it goes (depth). Until the owner writes
-// the row, the seeded values (design: enablement-credit section 1).
+// origination carries, the discount per consumption edge (gamma) and how far it goes (depth). The row is the only
+// source of these (design: enablement-credit section 1). With no row, or a row with any field missing or out of range
+// (the row is then unusable whole, not patched field by field), nothing travels: a grade credits only the selection
+// that made the row it judged, counted once, unscaled. Either is said on records' output, once per change.
 export type Travel = { w_person: number; w_lapse: number; w_close: number; gamma: number; depth: number }
-const SEEDED: Travel = { w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12 }
-const travelOf = (seen: Row[]): Travel => {
+const BOUNDS: Record<keyof Travel, [number, number]> = { w_person: [0, 10], w_lapse: [0, 10], w_close: [0, 10], gamma: [0, 1], depth: [0, 64] }
+let said = ""
+const say = (line: string): void => {
+  if (line !== said) console.log(`[records] ${line}`)
+  said = line
+}
+const travelOf = (seen: Row[]): Travel | undefined => {
   const row = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === SELECTION).sort((a, b) => a.seq - b.seq).at(-1)
-  const num = (k: keyof Travel, lo: number, hi: number): number => {
-    const v = Number(row?.[k])
-    return Number.isFinite(v) && v >= lo && v <= hi ? v : SEEDED[k]
-  }
-  return { w_person: num("w_person", 0, 10), w_lapse: num("w_lapse", 0, 10), w_close: num("w_close", 0, 10), gamma: num("gamma", 0, 1), depth: Math.floor(num("depth", 0, 64)) }
+  if (row === undefined) { say("credits selection row absent: depth 0 only"); return undefined }
+  const bad = (Object.keys(BOUNDS) as Array<keyof Travel>).find((k) => {
+    const v = row[k]
+    return typeof v !== "number" || !Number.isFinite(v) || v < BOUNDS[k][0] || v > BOUNDS[k][1] || (k === "depth" && !Number.isInteger(v))
+  })
+  const id = String(row.id).replace(/[^A-Za-z0-9_.:-]/g, "?").slice(0, 64)
+  if (bad !== undefined) { say(`credits selection row ${id} ignored: ${bad} missing or out of range; depth 0 only`); return undefined }
+  say(`credits selection row ${id} used`)
+  return { w_person: Number(row.w_person), w_lapse: Number(row.w_lapse), w_close: Number(row.w_close), gamma: Number(row.gamma), depth: Number(row.depth) }
 }
 
 const shapeOf = (e: unknown): string => typeof e === "object" && e !== null ? String((e as { shape?: unknown }).shape) : String(e)
@@ -162,7 +173,7 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     // back along consumption (reached), each once at w·gamma^k for its shortest distance k. Never the pool it saw.
     const weights = new Map<string, number>()
     if (ok && s !== undefined) {
-      for (const [id, g] of reached(idx(), s.id, travel)) {
+      for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel)) {
         if (!treated(id) || failed.has(id)) continue
         const c = String(sels.get(id)?.cell)
         weights.set(c, Math.max(weights.get(c) ?? 0, g))
@@ -308,9 +319,10 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   // answer is a model judging an outcome: it stays a row (closing and lapse detection read it) but originates nothing.
   const t = travelOf(all.filter((r) => r.seq <= atSeq))
   const scale = (k: Grade, w: number): Grade => ({ ...k, weights: new Map([...k.weights].map(([c, g]) => [c, g * w])) })
+  const by = (k: Grade, w: "w_person" | "w_lapse" | "w_close"): Grade => t === undefined ? k : scale(k, t[w])
   const originated = standing(all, asOf, atSeq).flatMap((k) =>
-    k.deadline && k.r === 0 ? [scale(k, t.w_lapse)] : k.by === PERSON ? [scale(k, t.w_person)] : [])
-  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures].map((k) => [k.key, k])).values()]
+    k.deadline && k.r === 0 ? [by(k, "w_lapse")] : k.by === PERSON ? [by(k, "w_person")] : [])
+  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close"))].map((k) => [k.key, k])).values()]
   return cells.map((c) => {
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],

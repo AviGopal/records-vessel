@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import * as F from "../src/fold"
 import { fold } from "../src/fold"
 import type { Row } from "../src/store"
@@ -7,6 +7,9 @@ import type { Row } from "../src/store"
 let seq = 0
 const row = (shape: string, role: string, fields: Record<string, unknown>): Row =>
   ({ shape, role, writer: role, id: `${shape}-${++seq}`, seq, t: "", input_refs: [], ...fields }) as Row
+// The owner's row saying how credit travels to selections, as the seeder writes it: records has no values of its own.
+const travel = (fields: Record<string, unknown> = {}): Row =>
+  row("credits", "owner", { target: "selection", w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12, ...fields })
 
 describe("posterior fold", () => {
   const ask = row("world_changed", "person", { what: "q" })
@@ -22,7 +25,7 @@ describe("posterior fold", () => {
   const grade = (fields: Record<string, unknown>) =>
     row("outcome", "described", { cell: "c", r: 1, selection_ref: outcomeSel.id, producer: "model-a", input_refs: [ask.id, answer.id], ...fields })
   const verdict = (fields: Record<string, unknown>) => row("outcome", "person", { r: 1, input_refs: [answer.id], ...fields })
-  const base = [ask, stepSel, answerSel, outcomeSel, controlSel, answer, controlAnswerSel, controlAnswer, otherAnswer, hop]
+  const base = [travel(), ask, stepSel, answerSel, outcomeSel, controlSel, answer, controlAnswerSel, controlAnswer, otherAnswer, hop]
   const post = (rows: Row[], cell: string, asOf = seq) => fold([...base, ...rows], [cell], asOf, seq)[0]
   const moved = { alpha: 2, beta: 1 }
   const still = { alpha: 1, beta: 1 }
@@ -122,7 +125,7 @@ describe("posterior fold", () => {
     expect(at(late, "due-cell")).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
     expect(at(late, "step")).toEqual({ cell: "step", ...still }) // in the due's pool, not consumed
     expect(at(late, "wait-cell")).toEqual({ cell: "wait-cell", ...still }) // the rule for waits after a deadline is gone
-    const heavier = row("credits", "owner", { target: "selection", w_lapse: 3 })
+    const heavier = travel({ w_lapse: 3 })
     expect(fold([...base, ...rows, heavier, late], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 4 })
     expect(at(lapse({ t: "2026-11-10T09:59:00Z" }), "due-cell")).toEqual({ cell: "due-cell", ...still })
     expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", ...still })
@@ -294,7 +297,8 @@ describe("a step whose move failed", () => {
   const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, okOut.id, badOut.id], uses: [okOut.id, badOut.id] })
   const verdict = (r: number) => row("outcome", "person", { r, input_refs: [answer.id] })
   const failOf = (s: Row, fields: Record<string, unknown>) => row("failure", "walk", { selection_ref: s.id, status: 500, body: "x", ...fields })
-  const post = (rows: Row[], cell: string) => fold([ask, okStep, badStep, answerSel, okOut, badOut, answer, ...rows], [cell], seq, seq)[0]
+  const owner = travel()
+  const post = (rows: Row[], cell: string) => fold([owner, ask, okStep, badStep, answerSel, okOut, badOut, answer, ...rows], [cell], seq, seq)[0]
 
   test("[MUST-FAIL] (a) a step that failed with a 500 gets no credit from a grade of the answer it preceded", () => {
     expect(post([failOf(badStep, {}), verdict(1)], "bad-step")).toEqual({ cell: "bad-step", alpha: 1, beta: 1 })
@@ -426,6 +430,12 @@ describe("a detector closing a gap", () => {
     expect(F.tally(rows, rows.length, rows.length).counted.detector).toBe(1)
   })
 
+  test("[MUST-FAIL] a closing's credit is scaled by the owner's w_close", () => {
+    const weighed = () => at("credits", "owner", { target: "selection", w_person: 1, w_lapse: 1, w_close: 2, gamma: 0.7, depth: 12 })
+    const rows = build([rule, weighed, gapRow("open"), sel("ask"), sel("land"), call("land_it"), gapRow("closed")])
+    expect(post(rows, "land")).toEqual({ cell: "land", alpha: 3, beta: 1 })
+  })
+
   test("[MUST-FAIL] a closing with no landing, or after a landing that failed, credits nothing and is refused as no_change", () => {
     const none = build([rule, gapRow("open"), sel("ask"), sel("other"), call("read_it"), gapRow("closed")])
     expect(post(none, "ask")).toEqual({ cell: "ask", alpha: 1, beta: 1 })
@@ -458,7 +468,53 @@ describe("credit travels along consumption", () => {
   const ask = row("world_changed", "person", { what: "q" })
   const sel = (cell: string, fields: Record<string, unknown> = {}) => row("selection", "walk", { arm: "treated", cell, ...fields })
   const out = (s: Row, fields: Record<string, unknown> = {}) => row("hop", "walk", { selection_ref: s.id, output: {}, ...fields })
-  const at = (rows: Row[], cell: string) => fold(rows, [cell], seq, seq)[0]
+  const owner = travel()
+  const at = (rows: Row[], cell: string) => fold([owner, ...rows], [cell], seq, seq)[0]
+  const bare = (rows: Row[], cells: string[]) => fold(rows, cells, seq, seq)
+  const diamond = () => {
+    const root = sel("root-step")
+    const rootOut = out(root)
+    const left = sel("left", { a: "produce/x/ch" })
+    const leftRow = row("note", "described", { selection_ref: left.id, input_refs: [rootOut.id], uses: [rootOut.id] })
+    const answerSel = sel("answer-cell")
+    const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, leftRow.id], uses: [leftRow.id] })
+    return [ask, root, rootOut, left, leftRow, answerSel, answer, row("outcome", "person", { r: 1, input_refs: [answer.id] })]
+  }
+  const CELLS = ["answer-cell", "left", "root-step"]
+
+  test("[MUST-FAIL] with no owner row nothing travels: a verdict credits only the selection that made what it judged, as an owner row at depth 0 with weights 1 would", () => {
+    const rows = diamond()
+    expect(bare(rows, CELLS)).toEqual(bare([...rows, travel({ depth: 0 })], CELLS))
+    expect(bare(rows, CELLS)).toEqual([
+      { cell: "answer-cell", alpha: 2, beta: 1 }, { cell: "left", alpha: 1, beta: 1 }, { cell: "root-step", alpha: 1, beta: 1 },
+    ])
+  })
+
+  test("[MUST-FAIL] a row with any field missing or out of range is ignored whole, the same as no row, and records says which field", () => {
+    const rows = diamond()
+    const log = spyOn(console, "log").mockImplementation(() => {})
+    try {
+      for (const [bad, field] of [[travel({ gamma: 1.5 }), "gamma"], [travel({ depth: 2.5 }), "depth"], [travel({ w_person: undefined }), "w_person"], [travel({ w_close: "1" }), "w_close"]] as Array<[Row, string]>) {
+        log.mockClear()
+        expect(bare([...rows, bad], CELLS)).toEqual(bare(rows, CELLS))
+        expect(log.mock.calls.flat().join("\n")).toContain(`credits selection row ${bad.id} ignored: ${field} missing or out of range`)
+      }
+      bare([...rows, travel()], CELLS) // a row in use, then none: one line for the change, not one per fold
+      log.mockClear()
+      bare(rows, CELLS)
+      bare(rows, CELLS)
+      expect(log.mock.calls.flat().filter((l) => String(l).includes("credits selection row absent: depth 0 only")).length).toBe(1) // once per change
+    } finally { log.mockRestore() }
+  })
+
+  test("[MUST-FAIL] a valid owner row is used whole: its gamma, depth and weights, not values of records' own", () => {
+    const rows = diamond()
+    const [a, l, r] = bare([...rows, travel({ gamma: 0.5, w_person: 2 })], CELLS)
+    expect(a).toEqual({ cell: "answer-cell", alpha: 3, beta: 1 })
+    expect(l).toEqual({ cell: "left", alpha: 2, beta: 1 }) // 2 · 0.5
+    expect(r.alpha).toBeCloseTo(1.5, 10) // 2 · 0.5²
+    expect(bare([...rows, travel({ gamma: 0.5, w_person: 2, depth: 1 })], ["root-step"])[0]).toEqual({ cell: "root-step", alpha: 1, beta: 1 })
+  })
 
   test("[MUST-FAIL] a diamond credits the shared ancestor once, at its shortest distance, never once per path", () => {
     const root = sel("root-step")
@@ -489,7 +545,7 @@ describe("credit travels along consumption", () => {
     const rows = [ask, reqSel, request, callSel, callOut, answerSel, answer, v]
     expect(at(rows, "call-cell")).toEqual({ cell: "call-cell", alpha: 1.7, beta: 1 })
     expect(at(rows, "request-produce").alpha).toBeCloseTo(1.49, 10)
-    const shallow = row("credits", "owner", { target: "selection", depth: 1 })
+    const shallow = travel({ depth: 1 })
     expect(at([...rows, shallow], "call-cell")).toEqual({ cell: "call-cell", alpha: 1.7, beta: 1 })
     expect(at([...rows, shallow], "request-produce")).toEqual({ cell: "request-produce", alpha: 1, beta: 1 })
   })
