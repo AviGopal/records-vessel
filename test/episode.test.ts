@@ -129,6 +129,34 @@ describe("the walk's episode", () => {
     expect(await r.episode()).not.toContain(second.id)
   })
 
+  test("[MUST-FAIL] an owner repository row is configuration: never a root, and shared once with every root's work", async () => {
+    const r = await fresh()
+    await r.arm()
+    const repo = await r.write(NODE_KEY, { shape: "repository", repo: "some-repo", units: ["some.service"], roles: ["compute"], retired: false }, owner)
+    const first = await r.ask("first")
+    const second = await r.ask("second")
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id)).toEqual([first.id, second.id])
+    expect(all.shared.filter((x) => x.id === repo.id)).toHaveLength(1)
+    const ep = await r.episode()
+    expect(ep).toContain(repo.id)
+    expect(ep).toContain(first.id)
+  })
+
+  test("[MUST-FAIL] only the owner writes a repository row: a walk, described or person write is refused, so none is shared", async () => {
+    const r = await fresh()
+    await r.arm()
+    const first = await r.ask("first")
+    const row = { shape: "repository", repo: "some-repo", units: [], roles: [], retired: false }
+    for (const [key, as] of [[NODE_KEY, walk], [NODE_KEY, desc], [PERSON_KEY, undefined]] as const) {
+      const w = await r.write(key, row, as)
+      expect([as?.role ?? "person", w?.failure?.status]).toEqual([as?.role ?? "person", 403])
+    }
+    const all = await r.episodes()
+    expect(all.shared.filter((x: any) => x.shape === "repository")).toHaveLength(0)
+    expect(all.roots.map((x) => x.root.id)).toEqual([first.id])
+  })
+
   test("[MUST-FAIL] a row the walk recorded from a tool's answer is in its request's episode, and only in its request's", async () => {
     const r = await fresh()
     const first = await r.ask("first")

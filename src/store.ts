@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { blames, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, REQUIRES, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -20,7 +20,7 @@ export type Query = {
   latest_by?: string
 }
 
-const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS])
+const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY])
 const EXO_ROLES = new Set([PERSON, OWNER])
 const MINE = new Set([SELECTION, HOP, FAILURE])
 const FILE = join(DATA_DIR, "rows")
@@ -195,12 +195,13 @@ const earned = (w: string): (t: Row) => boolean => {
   }
 }
 
-// What every root's work shares: the owner's channels, schemas and call preconditions, and the templates the walk earned.
+// What every root's work shares: the owner's channels, schemas, call preconditions and repositories, and the templates
+// the walk earned.
 const shared = (w: string): Row[] => {
   const allSels = new Set(rows.filter((r) => r.shape === SELECTION).filter((r) => r.writer === w).map((r) => r.id))
   const ok = earned(w)
   return rows.filter((r) =>
-    (r.role === OWNER && (r.shape === CHANNEL || r.shape === SHAPE_SCHEMA || r.shape === REQUIRES)) ||
+    (r.role === OWNER && (r.shape === CHANNEL || r.shape === SHAPE_SCHEMA || r.shape === REQUIRES || r.shape === REPOSITORY)) ||
     (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) && ok(r)))
 }
 

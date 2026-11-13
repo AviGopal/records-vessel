@@ -23,6 +23,9 @@ export const REQUIRES = "requires"
 // credits the walk's steps on it only when a call of by_call ended among them first (fold.ts gapClosures). Configuration,
 // never work.
 export const CREDITS = "credits"
+// The owner's row for a repository this fleet holds: {repo, units, roles, retired}, the latest per repo its state.
+// Configuration every root's work is shown (the change_wanted judge reads it), never work for the walk.
+export const REPOSITORY = "repository"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.
