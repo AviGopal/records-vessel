@@ -348,10 +348,28 @@ export const walkCalls = (w: string, types: string[]): Call[] => {
   })
 }
 
+// What an episode answer carries of the walk's selections. A selection used to keep every id of the move's pool in
+// pool_refs and again in input_refs, so on a long-worked root each row held the whole episode, and the answer grew
+// with the square of it. The walk reads those lists back for one thing only: to tell whether a produce was already
+// refused over the same rows, from a selection that a schema refusal cites. So a selection is answered without them,
+// unless such a refusal in the same answer cites it. Each one left out says so (refs_omitted: how many ids, and an
+// empty input_refs), so a reader can tell a list left out from an empty one. Only selections are projected; the
+// stored rows are unchanged, and every reader inside records (the fold, closing, templates) reads them whole.
+export const projected = (rs: Row[]): Row[] => {
+  const refusedSel = new Set(rs.filter((r) => r.shape === FAILURE && r.refused === "schema").map((r) => String(r.selection_ref)))
+  return rs.map((r) => {
+    if (r.shape !== SELECTION || refusedSel.has(r.id)) return r
+    const { pool_refs, input_refs, ...rest } = r
+    return { ...rest, input_refs: [], refs_omitted: [pool_refs ?? []].flat().length + [input_refs ?? []].flat().length } as Row
+  })
+}
+
 export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> => {
   if (q.episode !== undefined && Array.isArray(q.calls)) return walkCalls(q.episode, q.calls)
   if (q.episode !== undefined) {
-    return q.roots === "all" ? episodes(q.episode) : episode(q.episode)
+    if (q.roots !== "all") return projected(episode(q.episode))
+    const all = episodes(q.episode)
+    return { shared: projected(all.shared), roots: all.roots.map((x) => ({ ...x, rows: projected(x.rows) })) }
   }
   return read(q)
 }

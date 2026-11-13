@@ -304,6 +304,40 @@ describe("the walk's episode", () => {
     expect(all.roots[0].rows.map((x) => x.id)).toEqual([g.id, sel.id])
   })
 
+  test("[MUST-FAIL] an episode answer carries a selection without its pool lists, marked, unless a schema refusal cites it; the stored rows are whole", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("hello")
+    const many = [a.id, ...Array.from({ length: 40 }, (_, k) => `row-${k}`)]
+    const plain = await r.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", a: "call/x", pool_refs: many, input_refs: many }, walk)
+    const refusedSel = await r.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", a: "produce/answer/ch", pool_refs: many, input_refs: many }, walk)
+    await r.write(NODE_KEY, { shape: "failure", status: 422, refused: "schema", selection_ref: refusedSel.id, input_refs: [refusedSel.id] }, walk)
+    const made = await r.write(NODE_KEY, { shape: "answer", selection_ref: plain.id, input_refs: [a.id, "row-1"] }, desc)
+    const rows = (await r.episodes()).roots[0].rows as Array<Record<string, any>>
+    const got = (id: string) => rows.find((x) => x.id === id)!
+    expect(got(plain.id).pool_refs).toBeUndefined()
+    expect(got(plain.id).input_refs).toEqual([])
+    expect(got(plain.id).refs_omitted).toBe(82) // both lists, 41 ids each: left out, and said so
+    expect(got(refusedSel.id).pool_refs).toEqual(many) // what a refusal is compared by stays
+    expect(got(made.id).input_refs).toEqual([a.id, "row-1"]) // only selections are projected
+    const stored = (await r.call(NODE_KEY, { type: "record_read", shape: "selection" })) as Array<Record<string, any>>
+    expect(stored.find((x) => x.id === plain.id)?.pool_refs).toEqual(many) // the store keeps them whole
+  })
+
+  test("[MUST-FAIL] an episode answer grows with its rows, not with their square: 500 selections of 500 ids answer about 10 times 50 of 50", async () => {
+    const answerBytes = async (n: number) => {
+      const r = await fresh()
+      await r.arm()
+      const a = await r.ask("hello")
+      const pool = [a.id, ...Array.from({ length: n - 1 }, (_, k) => `row-${k}`)]
+      for (let i = 0; i < n; i++) await r.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", a: "call/x", pool_refs: pool, input_refs: pool }, walk)
+      return JSON.stringify(await r.episodes()).length
+    }
+    const small = await answerBytes(50)
+    const large = await answerBytes(500)
+    expect(large / small).toBeLessThan(12) // quadratic would be about 100
+  }, 60_000)
+
   test("[MUST-FAIL] a gap written again while open is the same root: its earlier rows and the work on them stay in its episode", async () => {
     const r = await fresh()
     await r.arm()
