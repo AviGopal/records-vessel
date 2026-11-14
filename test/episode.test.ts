@@ -253,6 +253,21 @@ describe("the walk's episode", () => {
     expect((await r.write(PERSON_KEY, { shape: "credits", target: "gap", by_call: "x" })).failure?.status).toBe(403) // owner rows only
   })
 
+  test("[MUST-FAIL] the checks held for a person now: each gap's latest row, open, holding a claim; never an older row or a detector gap without one", async () => {
+    const r = await fresh()
+    const gapRow = (gap_id: string, status: string, extra: object = {}) =>
+      r.write(NODE_KEY, { shape: "gap", gap_id, status, summary: "s", ...extra }, { writer: "pull-sync", role: "detector" })
+    await gapRow("held", "open") // the gap before it was held: no claim
+    const heldNow = await gapRow("held", "open", { claim: "The test is right: ..." })
+    await gapRow("bare", "open") // a detector gap with no claim (22675, 23882)
+    await gapRow("was-held", "open", { claim: "old claim" })
+    await gapRow("was-held", "open") // its latest row no longer holds a claim
+    await gapRow("closed", "open", { claim: "c" })
+    await gapRow("closed", "closed", { claim: "c" })
+    const got = (await r.call(NODE_KEY, { type: "record_read", shape: "gap", latest_by: "gap_id", where: { status: "open" }, has: "claim" })) as Array<Record<string, any>>
+    expect(got.map((x) => x.id)).toEqual([heldNow.id])
+  })
+
   test("[MUST-FAIL] a read of one root's calls answers every call made for it, of any shape, oldest first, with or without outputs; one call by its id", async () => {
     const r = await fresh()
     await r.arm()

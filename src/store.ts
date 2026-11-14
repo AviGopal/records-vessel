@@ -22,6 +22,8 @@ export type Query = {
   root?: string
   call_id?: string
   output?: boolean
+  // Only rows that hold this field (any value): after latest_by, so a thing whose latest row dropped the field shows nothing.
+  has?: string
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY])
@@ -93,6 +95,10 @@ export const read = (q: Query): Row[] => {
     const latest = new Map<string, Row>()
     for (const r of out.filter((x) => x[key] !== undefined)) latest.set(String(r[key]), r)
     out = [...latest.values()].sort((a, b) => a.seq - b.seq)
+  }
+  if (q.has !== undefined) {
+    const f = String(q.has)
+    out = out.filter((r) => r[f] !== undefined && r[f] !== null)
   }
   if (q.refs_to !== undefined) {
     const s = String(q.refs_to)
