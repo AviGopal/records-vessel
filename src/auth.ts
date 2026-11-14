@@ -11,8 +11,9 @@ type Answer = { success: boolean; data: { authenticated: boolean; keyId: string;
 type Known = { keyId: string; ownerKind?: string }
 const kindOf = (a: Answer): { ownerKind?: string } => typeof a.data.ownerKind === "string" ? { ownerKind: a.data.ownerKind } : {}
 
-// Each key's answer is kept for the life of the process: identity is asked once per key. So a key's class marked after
-// this process started is read when the process next starts (records restarts on install).
+// Each key's answer is kept for reads, so identity is not asked on every read. A write asks identity afresh (fresh): a
+// key's class decides whether its row is a person's, so a mark identity gives or takes back counts from the next write,
+// not from the next restart.
 const known = new Map<string, Known>()
 
 const digest = (key: string): Buffer => new Bun.CryptoHasher("sha256").update(key).digest()
@@ -41,10 +42,10 @@ const ask = async (pointer: Record<string, unknown>): Promise<Answer | undefined
   return a
 }
 
-const validate = async (key: string): Promise<Known | undefined> => {
+const validate = async (key: string, fresh = false): Promise<Known | undefined> => {
   const h = digest(key).toString("hex")
   const hit = known.get(h)
-  if (hit !== undefined) {
+  if (hit !== undefined && !fresh) {
     return hit
   }
   const a = await ask({ type: "apiKey", apiKey: key })
@@ -106,7 +107,7 @@ const onBehalfOf = async (token: string, shape: string): Promise<Known | undefin
   return { keyId: String(a.data.keyId), ...kindOf(a) }
 }
 
-export const authenticate = async (req: Request, shape: string): Promise<Who> => {
+export const authenticate = async (req: Request, shape: string, fresh = false): Promise<Who> => {
   const bearer = /^Bearer (\S+)$/.exec(header(req))
   if (bearer !== null) {
     const found = await onBehalfOf(bearer[1] as string, shape)
@@ -116,7 +117,7 @@ export const authenticate = async (req: Request, shape: string): Promise<Who> =>
   if (timingSafeEqual(digest(key), OWN)) {
     return { ok: true, self: true, keyId: "" }
   }
-  const found = await validate(key)
+  const found = await validate(key, fresh)
   if (found === undefined) {
     return { ok: false, self: false, keyId: "" }
   }

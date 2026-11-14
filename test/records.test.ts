@@ -10,6 +10,8 @@ const PERSON_KEY = "person-key-for-test"
 const OPERATOR_KEY = "operator-key-for-test"
 const KINDLESS_KEY = "kindless-key-for-test"
 const DOWN_KEY = "identity-cannot-answer-for-test"
+const REMARKED_KEY = "remarked-key-for-test"
+let remarked = "operator" // the class identity gives REMARKED_KEY now: a test changes it between writes
 
 let discovery: Fake
 let identity: Fake
@@ -47,6 +49,7 @@ beforeAll(async () => {
     if (k === OPERATOR_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-operator", ownerKind: "operator" } })
     if (k === KINDLESS_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-kindless" } })
     if (k === DOWN_KEY) return new Response("identity is down", { status: 503 })
+    if (k === REMARKED_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-remarked", ownerKind: remarked } })
     return Response.json({ success: false }, { status: 401 })
   })
   dir = mkdtempSync(join(tmpdir(), "records-test-"))
@@ -125,6 +128,16 @@ describe("records vessel", () => {
     // identity unable to answer: refused, never written as a person
     const down = await write(DOWN_KEY, { shape: "note", text: "x" })
     expect(down.status).toBe(401)
+  })
+
+  test("[MUST-FAIL] a mark identity gives or takes back counts from the next write, not the next restart", async () => {
+    const as = async () => ((await write(REMARKED_KEY, { shape: "note", text: remarked })).body as { role?: string })
+    remarked = "operator"
+    expect(await as()).toMatchObject({ role: "operator" })
+    remarked = "person"
+    expect(await as()).toMatchObject({ role: "person" })
+    remarked = "operator"
+    expect(await as()).toMatchObject({ role: "operator" })
   })
 
   test("a key identity rejects gets 401", async () => {

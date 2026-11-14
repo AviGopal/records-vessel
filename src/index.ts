@@ -46,7 +46,13 @@ const HANDLERS = new Map<string, Handler>([
       // A person's row only under a key identity marks as a person's own; any other key (an operator's, an agent's
       // cockpit key, a tool's, or one identity said nothing of) writes as an operator: its asks are asks, never a
       // person's verdict.
-      const out = write(p.row, who.keyId, who.ownerKind === PERSON ? PERSON : OPERATOR)
+      const role = who.ownerKind === PERSON ? PERSON : OPERATOR
+      // A grade from a key identity does not mark as a person's is written, as an operator's: never silently. Said where
+      // an operator reads it, by the shape and the class identity gave (never the key).
+      if (role === OPERATOR && String(p.row?.shape) === "outcome") {
+        console.log(`[records] an outcome from a key not marked a person's was written as an operator's (class=${String(who.ownerKind ?? "none").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 32)})`)
+      }
+      const out = write(p.row, who.keyId, role)
       return answer(out.status, out.body)
     }
     if (p.writer === undefined || p.role === undefined) {
@@ -80,7 +86,8 @@ const handle = async (req: Request): Promise<Response> => {
   // The body is read before authenticating because an on-behalf-of token is good for one shape only; an unreadable body
   // still answers 401 to an unauthenticated caller before it answers 400.
   const body = (await req.json().catch(() => undefined)) as { impulse?: { pointer?: Pointer } } | undefined
-  const who = await authenticate(req, String(body?.impulse?.pointer?.type ?? ""))
+  const type = String(body?.impulse?.pointer?.type ?? "")
+  const who = await authenticate(req, type, type === RECORD_WRITE)
   if (!who.ok) {
     return fail(401, "")
   }
