@@ -128,6 +128,13 @@ describe("records: a federation on-behalf-of token", () => {
     }
   })
 
+  test("[MUST-FAIL] a row from another node's key carries the key records was told by identity, never one the sender states", async () => {
+    const r = await write({ kind: "peer", keyId: "kid-node-two" }, { row: { shape: "hop", mark: "far-by-key", by_key: "kid-someone-else" }, writer: "walk-vessel", role: "walk" })
+    expect(r.status).toBe(200)
+    const back = (await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape: "hop" })).body.filter((x: any) => x.mark === "far-by-key")
+    expect(back.map((x: any) => x.by_key)).toEqual(["kid-node-two"])
+  })
+
   test("[MUST-FAIL] another node's key writes no person's, operator's or owner row, and nothing is written", async () => {
     const before = await count("outcome")
     for (const role of ["person", "operator", "owner"]) {
@@ -252,6 +259,32 @@ describe("records with no federation transport named", () => {
       // Refused before identity is asked: there is no node to state as the audience.
       expect([node, identity.seen.filter((x) => (x.body as any)?.impulse?.pointer?.token === t).length]).toEqual([node, 0])
     }
+  })
+})
+
+describe("records whose own org identity does not answer", () => {
+  let mute: ReturnType<typeof run>
+  let p3: number
+  let d3: string
+  beforeAll(async () => {
+    d3 = mkdtempSync(join(tmpdir(), "records-obo-mute-"))
+    p3 = freePort()
+    // A node key identity does not know: it answers no org for this records.
+    mute = run("src/index.ts", {
+      RECORDS_VESSEL_ID: "records-obo-mute", RECORDS_PORT: String(p3), DISCOVERY_URL: discovery.url,
+      RECORDS_ENDPOINT: `http://127.0.0.1:${p3}`, RECORDS_DATA_DIR: d3, IDENTITY_VESSEL_URL: identity.url,
+      METABOB_API_KEY: "node-key-identity-does-not-know", FED_VESSEL_ID: TRANSPORT,
+    })
+    await healthy(p3)
+  })
+  afterAll(() => { mute?.kill(); rmSync(d3, { recursive: true, force: true }) })
+  test("[MUST-FAIL] a cross-node write is refused even though the caller's org is answered: its own is not", async () => {
+    const r = await fetch(`http://127.0.0.1:${p3}/v2/impulses/resolve`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token(SELF, "record_write", { kind: "peer" })}` },
+      body: JSON.stringify({ impulse: { pointer: { type: "record_write", row: { shape: "hop" }, writer: "walk-vessel", role: "walk" } } }),
+    })
+    const body = (await r.json()) as any
+    expect([r.status, body?.failure?.body]).toEqual([403, "a cross-node write needs both orgs (the caller's: answered, this records': not answered)"])
   })
 })
 

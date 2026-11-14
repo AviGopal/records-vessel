@@ -68,7 +68,9 @@ const HANDLERS = new Map<string, Handler>([
         if (p.writer === undefined || p.role === undefined) {
           return fail(400, RECORD_WRITE)
         }
-        const out = write(p.row, String(p.writer), String(p.role))
+        // Which key wrote it is records' to say, from the token, never the sender's: a node key is held by every vessel on
+        // its node, so this is what tells one node's rows from another's in one store.
+        const out = write({ ...p.row, by_key: who.keyId }, String(p.writer), String(p.role))
         return answer(out.status, out.body)
       }
       // A person's key from another node of this org: written below, as a person's key on this node is.
