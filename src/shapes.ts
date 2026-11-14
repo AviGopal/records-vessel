@@ -36,8 +36,11 @@ export const WALK = "walk"
 export const RECORDS = "records"
 export const DESCRIBED = "described"
 export const PERSON = "person"
-// A key identity validates that is not marked a person's (an operator's or an agent's cockpit key, a tool's): its rows
-// are asks and evidence like a person's, never a person's verdict.
+// A key identity marks as an operator's: its rows are asks and evidence like a person's, never a person's verdict.
 export const OPERATOR = "operator"
+// A key identity validates and marks as neither a person's nor an operator's (unclassified, a peer's, or one it says
+// nothing of): its rows are stored and read like any, but are no ask, no root, no waker and no evidence, until identity
+// marks the key.
+export const UNMARKED = "unmarked"
 export const OWNER = "owner"
 export const TREATED = "treated"

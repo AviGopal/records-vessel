@@ -13,6 +13,7 @@ import { type Fake, fake, freePort, healthy, run, until } from "./harness"
 const NODE_KEY = "node-key-for-test"
 const PERSON_KEY = "person-key-for-test"
 const OPERATOR_KEY = "operator-key-for-test"
+const UNMARKED_KEY = "unmarked-key-for-test"
 const WALK = "walk-test"
 const walk = { writer: WALK, role: "walk" }
 const desc = { writer: "described-test", role: "described" }
@@ -28,7 +29,9 @@ const fresh = async () => {
     ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-person", ownerKind: "person" } })
     : body?.impulse?.pointer?.apiKey === OPERATOR_KEY
       ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-operator", ownerKind: "operator" } })
-      : Response.json({ success: false }, { status: 401 }))
+      : body?.impulse?.pointer?.apiKey === UNMARKED_KEY
+        ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-unmarked", ownerKind: "unclassified" } })
+        : Response.json({ success: false }, { status: 401 }))
   const dir = mkdtempSync(join(tmpdir(), "records-episode-"))
   const port = freePort()
   const vessel = run("src/index.ts", {
@@ -478,6 +481,17 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x: any) => x.root.id)).toContain(a.id) // not a person's verdict: still open
     await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [answer.id] })
     expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id) // a person's closes it
+  })
+
+  test("[MUST-FAIL] an ask under a key identity has not marked (unclassified) is stored but is no request: no root, until identity marks it", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = (await r.write(UNMARKED_KEY, { shape: "world_changed", what: "an unmarked key's ask" })) as { id: string; role: string }
+    expect(a.role).toBe("unmarked")
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id)
+    // the marked operator's ask beside it is a root
+    const b = (await r.write(OPERATOR_KEY, { shape: "world_changed", what: "an operator's ask" })) as { id: string }
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).toContain(b.id)
   })
 
   const reached = async (r: Awaited<ReturnType<typeof fresh>>, verdict: number | null) => {

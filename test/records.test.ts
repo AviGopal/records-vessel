@@ -9,6 +9,8 @@ const NODE_KEY = "node-key-for-test"
 const PERSON_KEY = "person-key-for-test"
 const OPERATOR_KEY = "operator-key-for-test"
 const KINDLESS_KEY = "kindless-key-for-test"
+const UNCLASSIFIED_KEY = "unclassified-key-for-test"
+const PEER_KEY = "peer-key-for-test"
 const DOWN_KEY = "identity-cannot-answer-for-test"
 const REMARKED_KEY = "remarked-key-for-test"
 let remarked = "operator" // the class identity gives REMARKED_KEY now: a test changes it between writes
@@ -48,6 +50,8 @@ beforeAll(async () => {
     if (k === PERSON_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-person", ownerKind: "person" } })
     if (k === OPERATOR_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-operator", ownerKind: "operator" } })
     if (k === KINDLESS_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-kindless" } })
+    if (k === UNCLASSIFIED_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-unclassified", ownerKind: "unclassified" } })
+    if (k === PEER_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-peer", ownerKind: "peer" } })
     if (k === DOWN_KEY) return new Response("identity is down", { status: 503 })
     if (k === REMARKED_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-remarked", ownerKind: remarked } })
     return Response.json({ success: false }, { status: 401 })
@@ -120,11 +124,14 @@ describe("records vessel", () => {
     expect(ok.body.role).toBe("detector")
   })
 
-  test("[MUST-FAIL] only a key identity marks as a person's writes as a person; any other key writes as an operator", async () => {
+  test("[MUST-FAIL] a key identity marks as a person's writes as a person, one it marks an operator's as an operator, any other unmarked", async () => {
     const as = async (key: string) => ((await write(key, { shape: "note", text: key })).body as { role?: string; writer?: string })
     expect(await as(PERSON_KEY)).toMatchObject({ role: "person", writer: "kid-person" })
     expect(await as(OPERATOR_KEY)).toMatchObject({ role: "operator", writer: "kid-operator" })
-    expect(await as(KINDLESS_KEY)).toMatchObject({ role: "operator", writer: "kid-kindless" }) // identity said nothing: not a person
+    // identity said nothing, or marked it neither a person's nor an operator's: written, but unmarked (no ask)
+    expect(await as(KINDLESS_KEY)).toMatchObject({ role: "unmarked", writer: "kid-kindless" })
+    expect(await as(UNCLASSIFIED_KEY)).toMatchObject({ role: "unmarked", writer: "kid-unclassified" })
+    expect(await as(PEER_KEY)).toMatchObject({ role: "unmarked", writer: "kid-peer" })
     // identity unable to answer: refused, never written as a person
     const down = await write(DOWN_KEY, { shape: "note", text: "x" })
     expect(down.status).toBe(401)

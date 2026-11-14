@@ -4,7 +4,7 @@ import { PORT, VESSEL_ID } from "./config"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { GAP, OPERATOR, OUTCOME, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
+import { GAP, OPERATOR, OUTCOME, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
 import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -43,14 +43,15 @@ const HANDLERS = new Map<string, Handler>([
       if (String(p.row?.shape) === GAP) {
         return fail(403, "a gap row is written only under the node's own key")
       }
-      // A person's row only under a key identity marks as a person's own; any other key (an operator's, an agent's
-      // cockpit key, a tool's, or one identity said nothing of) writes as an operator: its asks are asks, never a
-      // person's verdict.
-      const role = who.ownerKind === PERSON ? PERSON : OPERATOR
-      // A grade from a key identity does not mark as a person's is written, as an operator's: never silently. Said where
-      // an operator reads it, by the shape and the class identity gave (never the key).
-      if (role === OPERATOR && String(p.row?.shape) === OUTCOME) {
-        console.log(`[records] an outcome from a key not marked a person's was written as an operator's (class=${String(who.ownerKind ?? "none").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 32)})`)
+      // A person's row only under a key identity marks as a person's own; an operator's only under a key it marks as an
+      // operator's (its asks are asks, never a person's verdict). Any other key (unclassified, a peer's, an agent's
+      // cockpit key identity has not marked, or one it said nothing of) writes an unmarked row: stored, but no ask until
+      // identity marks the key. Which keys may ask is identity's mark, read at each write, never a list here.
+      const role = who.ownerKind === PERSON ? PERSON : who.ownerKind === OPERATOR ? OPERATOR : UNMARKED
+      // A grade from a key identity does not mark as a person's is written as that key's class: never silently. Said
+      // where an operator reads it, by the shape and the class identity gave (never the key).
+      if (role !== PERSON && String(p.row?.shape) === OUTCOME) {
+        console.log(`[records] an outcome from a key not marked a person's was written as ${role} (class=${String(who.ownerKind ?? "none").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 32)})`)
       }
       const out = write(p.row, who.keyId, role)
       return answer(out.status, out.body)
