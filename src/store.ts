@@ -433,21 +433,28 @@ export const projected = (rs: Row[]): Row[] => {
   })
 }
 
-// Whether each grade counted, as the fold decides it, on the outcome rows a read returns: counted, or why not (the fold's
-// own reason, or "replaced" when the same writer graded the same answer again later). A reader shown a grade is shown
-// its standing, so a grade the fold refused is never taken for one that counts. Computed once per sequence number and
-// put on copies: the stored rows are never changed.
+// Whether each grade counted, as the fold decides it, on every outcome row a read returns: counted, or why not (the
+// fold's own reason; "replaced" when the same writer graded the same answer again later; "not_a_grader" for an outcome
+// written in a role the fold takes no grade from). A reader shown a grade is shown its standing, so a grade the fold
+// refused is never taken for one that counts. The standing is records' to say: whatever counted or why a writer put on
+// its row is replaced. Computed once per sequence number, from one pass of the fold's grades (the standing ones are
+// each writer's latest valid grade of an answer, as standing() keeps them), and put on copies: the stored rows are
+// never changed.
 let standingAt: { seq: number; why: Map<string, { counted: boolean; why?: string }> } | undefined
 const withStanding = (out: Row[]): Row[] => {
   if (!out.some((r) => r.shape === OUTCOME)) return out
   if (standingAt?.seq !== seq) {
     const all = grades(rows, seq, seq)
-    const stands = new Set(standing(rows, seq, seq).map((g) => g.id))
+    const stands = new Set([...new Map(all.filter((g) => g.ok).map((g) => [g.key, g])).values()].map((g) => g.id))
     const why = new Map(all.map((g) => [g.id, stands.has(g.id) ? { counted: true } : { counted: false, why: g.refused ?? "replaced" }]))
     standingAt = { seq, why }
   }
   const m = standingAt.why
-  return out.map((r) => r.shape === OUTCOME && m.has(r.id) ? { ...r, ...m.get(r.id) } : r)
+  return out.map((r) => {
+    if (r.shape !== OUTCOME) return r
+    const { counted: _counted, why: _why, ...stored } = r
+    return { ...stored, ...(m.get(r.id) ?? { counted: false, why: "not_a_grader" }) }
+  })
 }
 
 export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> => {

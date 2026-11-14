@@ -279,6 +279,13 @@ describe("records vessel", () => {
     // the stored rows are not changed: a read of another shape carries no standing
     const plain = await call(NODE_KEY, { type: "record_read", ids: [answer] })
     expect((plain.body as any[])[0].counted).toBeUndefined()
+    // the standing is records' to say: an outcome a non-grader wrote claiming counted:true reads as no grade, and a
+    // grade's own stored why is replaced by the fold's
+    const forged = await id({ shape: "outcome", r: 1, event_ref: ask, input_refs: [ask, answer], counted: true }, as("walk-test", "walk"))
+    const claimed = await id({ shape: "outcome", r: 1, selection_ref: outcomeSel, event_ref: ask, input_refs: [ask, answer], why: "made up" }, as("described-test", "described"))
+    const again2 = await call(NODE_KEY, { type: "record_read", ids: [forged, claimed] })
+    const by2 = new Map((again2.body as any[]).map((r) => [r.id, [r.counted, r.why]]))
+    expect([by2.get(forged), by2.get(claimed)]).toEqual([[false, "not_a_grader"], [true, undefined]])
   })
 
   test("registers record_lapsed as a shape it serves", () => {
