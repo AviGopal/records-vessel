@@ -4,7 +4,7 @@ import { PORT, VESSEL_ID } from "./config"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { GAP, OPERATOR, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
+import { GAP, OPERATOR, OUTCOME, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
 import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -49,7 +49,7 @@ const HANDLERS = new Map<string, Handler>([
       const role = who.ownerKind === PERSON ? PERSON : OPERATOR
       // A grade from a key identity does not mark as a person's is written, as an operator's: never silently. Said where
       // an operator reads it, by the shape and the class identity gave (never the key).
-      if (role === OPERATOR && String(p.row?.shape) === "outcome") {
+      if (role === OPERATOR && String(p.row?.shape) === OUTCOME) {
         console.log(`[records] an outcome from a key not marked a person's was written as an operator's (class=${String(who.ownerKind ?? "none").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 32)})`)
       }
       const out = write(p.row, who.keyId, role)
