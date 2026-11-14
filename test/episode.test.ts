@@ -253,6 +253,37 @@ describe("the walk's episode", () => {
     expect((await r.write(PERSON_KEY, { shape: "credits", target: "gap", by_call: "x" })).failure?.status).toBe(403) // owner rows only
   })
 
+  test("[MUST-FAIL] a read of one root's calls answers every call made for it, of any shape, oldest first, with or without outputs; one call by its id", async () => {
+    const r = await fresh()
+    await r.arm()
+    const w1 = await r.ask("the person's ask")
+    const w2 = await r.ask("another ask")
+    const sel = (root: string) => r.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c", root, pool_refs: [root], input_refs: [root] }, walk)
+    const started = (s: { id: string }, type: string, call: string) =>
+      r.write(NODE_KEY, { shape: "hop", phase: "started", kind: "call", pointer_type: type, call_id: call, selection_ref: s.id, input_refs: [s.id] }, walk)
+    const s1 = await sel(w1.id)
+    await started(s1, "clone_it", "c1")
+    await r.write(NODE_KEY, { shape: "hop", phase: "ended", kind: "call", call_id: "c1", selection_ref: s1.id, output: { cwd: "/trees/a" }, input_refs: [s1.id] }, walk)
+    await started(s1, "read_it", "c5")
+    await r.write(NODE_KEY, { shape: "hop", phase: "ended", kind: "call", call_id: "c5", selection_ref: s1.id, output: { text: "y" }, input_refs: [s1.id] }, walk)
+    const s2 = await sel(w2.id)
+    await started(s2, "clone_it", "c3") // another root's call: not this root's
+    const s3 = await sel(w1.id)
+    await started(s3, "edit_it", "c2")
+    const read = (q: object) => r.call(NODE_KEY, { type: "record_read", ...q }) as Promise<Array<Record<string, any>>>
+    const bare = await read({ root: w1.id, calls: "all", output: false })
+    expect(bare.map((c) => c.call_id)).toEqual(["c1", "c5", "c2"]) // every shape, its own root only, oldest first
+    expect(bare.map((c) => c.type)).toEqual(["clone_it", "read_it", "edit_it"])
+    expect(bare.map((c) => c.state)).toEqual(["ended", "ended", "started"])
+    expect(bare.every((c) => !("output" in c))).toBe(true)
+    const whole = await read({ root: w1.id, calls: "all" })
+    expect(whole[0].output).toEqual({ cwd: "/trees/a" })
+    const one = await read({ call_id: "c5" })
+    expect(one.map((c) => [c.call_id, c.root, c.output])).toEqual([["c5", w1.id, { text: "y" }]])
+    expect(await read({ root: "no-such-root", calls: "all" })).toEqual([])
+    expect(await read({ call_id: "no-such-call" })).toEqual([])
+  })
+
   test("[MUST-FAIL] a read of the walk's calls of named shapes answers each with its root, the root's state and the call's (abandoned once the walk moved on), never the rows behind them", async () => {
     const r = await fresh()
     await r.arm()

@@ -16,8 +16,12 @@ export type Query = {
   where?: Record<string, unknown>
   episode?: string
   roots?: string
-  calls?: string[]
+  calls?: string[] | "all"
   latest_by?: string
+  // The calls made for one root (with calls: "all"), or one call by its id; output false leaves each call's output out.
+  root?: string
+  call_id?: string
+  output?: boolean
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY])
@@ -365,6 +369,12 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number,
 export type Call = { call_id: string; type: string; selection_ref: string; root: string; open: boolean; state: "started" | "ended" | "failed" | "abandoned"; seq: number; t: string; output?: unknown }
 export const walkCalls = (w: string, types: string[]): Call[] => {
   const want = new Set(types.map(String))
+  return callsOf(w, (h, live) => want.has(String(h.pointer_type)) || live(h))
+}
+
+// The calls a walker made that `keep` takes, each as walkCalls answers it. keep is given the started hop and whether it
+// is still in flight.
+const callsOf = (w: string, keep: (h: Row, live: (h: Row) => boolean, sel: Row | undefined) => boolean): Call[] => {
   const open = new Set(openRoots(w).map((r) => r.id))
   const mine = rows.filter((r) => MINE.has(r.shape) && r.writer === w)
   const sels = new Map(mine.filter((r) => r.shape === SELECTION).map((s) => [s.id, s]))
@@ -373,7 +383,7 @@ export const walkCalls = (w: string, types: string[]): Call[] => {
   const newest = mine.filter((r) => r.shape === SELECTION).reduce<Row | undefined>((a, r) => (a === undefined || r.seq > a.seq ? r : a), undefined)
   const settled = (id: string) => ended.has(id) || failed.has(id)
   const live = (h: Row) => !settled(String(h.call_id)) && (String(h.selection_ref) === newest?.id || !sels.has(String(h.selection_ref)))
-  return mine.filter((r) => r.shape === HOP && r.phase === "started" && (want.has(String(r.pointer_type)) || live(r))).map((h) => {
+  return mine.filter((r) => r.shape === HOP && r.phase === "started" && keep(r, live, sels.get(String(r.selection_ref)))).map((h) => {
     const id = String(h.call_id)
     const root = String(sels.get(String(h.selection_ref))?.root ?? "")
     const e = ended.get(id)
@@ -382,6 +392,23 @@ export const walkCalls = (w: string, types: string[]): Call[] => {
       state: e ? "ended" : failed.has(id) ? "failed" : live(h) ? "started" : "abandoned", seq: h.seq, t: h.t, ...(e ? { output: e.output } : {}),
     }
   })
+}
+
+// The calls made for one root, oldest first: a person's view of what the walk did with their ask reads this, one read per
+// ask, naming no walker and no call shape. The walker is whoever wrote a selection for the root; every call its
+// selections for the root started is answered, whatever its shape. With output false each call's output (an ended
+// call's answer, at most 16 KiB as the walk keeps it) is left out, so a view that draws only the steps reads rows, not
+// their answers; a step's answer is then read by its call id.
+export const rootCalls = (root: string, output = true): Call[] => {
+  const walkers = new Set(rows.filter((r) => r.shape === SELECTION && String(r.root) === root).map((r) => String(r.writer)))
+  const all = [...walkers].flatMap((w) => callsOf(w, (_h, _live, sel) => String(sel?.root) === root))
+  return all.sort((a, b) => a.seq - b.seq).map((c) => (output ? c : (({ output: _o, ...rest }) => rest)(c) as Call))
+}
+
+// One call by its id, as walkCalls answers it, with its output; [] when no call has that id.
+export const oneCall = (callId: string): Call[] => {
+  const started = rows.find((r) => r.shape === HOP && r.phase === "started" && String(r.call_id) === callId)
+  return started ? callsOf(String(started.writer), (h) => String(h.call_id) === callId) : []
 }
 
 // What an episode answer carries of the walk's selections. A selection used to keep every id of the move's pool in
@@ -401,6 +428,8 @@ export const projected = (rs: Row[]): Row[] => {
 }
 
 export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> => {
+  if (typeof q.root === "string" && q.calls === "all") return rootCalls(q.root, q.output !== false)
+  if (typeof q.call_id === "string") return oneCall(q.call_id)
   if (q.episode !== undefined && Array.isArray(q.calls)) return walkCalls(q.episode, q.calls)
   if (q.episode !== undefined) {
     if (q.roots !== "all") return projected(episode(q.episode))
