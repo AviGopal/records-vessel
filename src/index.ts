@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { type Who, authenticate } from "./auth"
+import { type Who, authenticate, ownOrg } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { GAP, OPERATOR, OUTCOME, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
+import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
 import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -26,16 +26,52 @@ const fail = (status: number, body: string): Response => Response.json({ failure
 
 const answer = (status: number, value: unknown): Response => Response.json(value, { status })
 
+// Why a write from another node is not taken, or undefined when it is. One org is one unit: a write from another node of
+// this records' org is taken exactly as that key's write would be on its own node, and nothing more. Both orgs are the
+// ones identity answers (the caller's signed into its token from its key, this records' from its own key), never one a
+// sender states. A key identity marks as a person's writes a person's row, as on its own node. A key it marks as another
+// node's (peer) writes that node's rows under their declared writer and role, as a node's own key does on its own
+// records, except the rows only this node writes for itself (its owner's configuration) and rows no node key may declare
+// (a person's, an operator's). An operator's key writes on its own node only, and a key identity marks as neither is no
+// one's: neither crosses.
+const crossNode = async (p: Pointer, who: Who): Promise<string | undefined> => {
+  const mine = await ownOrg()
+  if (mine === undefined || who.orgId === undefined) {
+    return `a cross-node write needs both orgs (the caller's: ${who.orgId === undefined ? "not answered" : "answered"}, this records': ${mine === undefined ? "not answered" : "answered"})`
+  }
+  if (who.orgId !== mine) {
+    return "a cross-node write is taken only from this records' org"
+  }
+  if (who.ownerKind === PERSON) {
+    return undefined
+  }
+  if (who.ownerKind !== PEER) {
+    return "a cross-node write needs a key identity marks as a person's or another node's"
+  }
+  if ([PERSON, OPERATOR, OWNER].includes(String(p.role))) {
+    return "another node writes its own rows, never a person's, an operator's or this node's owner rows"
+  }
+  return undefined
+}
+
 const HANDLERS = new Map<string, Handler>([
   [RECORD_WRITE, async (p, who) => {
-    // A write from another node is refused until identity marks whose key it is. Taken as a person row it would be an open
-    // request the walk works and a grade the fold counts, and every vessel on the other node holds a key that can obtain
-    // the token. Its declared writer and role are never read. Reads from another node are served like any caller's.
     if (who.obo === true) {
-      // Said where an operator reads it: the transport's ingress cannot tell this 403 from a stored write (the answer has
-      // no top-level error). The shape only, never the caller's key or token.
-      console.log(`[records] refused a cross-node write: cross-node writes wait for person marking (shape=${String(p.row?.shape ?? "").replace(/[^A-Za-z0-9_.:-]/g, "?").slice(0, 64)})`)
-      return fail(403, "cross-node writes wait for person marking")
+      const refused = await crossNode(p, who)
+      if (refused !== undefined) {
+        // Said where an operator reads it: the transport's ingress cannot tell this 403 from a stored write (the answer
+        // has no top-level error). The reason and the shape only, never the caller's key, token or org.
+        console.log(`[records] refused a cross-node write: ${refused} (shape=${String(p.row?.shape ?? "").replace(/[^A-Za-z0-9_.:-]/g, "?").slice(0, 64)})`)
+        return fail(403, refused)
+      }
+      if (who.ownerKind === PEER) {
+        if (p.writer === undefined || p.role === undefined) {
+          return fail(400, RECORD_WRITE)
+        }
+        const out = write(p.row, String(p.writer), String(p.role))
+        return answer(out.status, out.body)
+      }
+      // A person's key from another node of this org: written below, as a person's key on this node is.
     }
     if (!who.self) {
       // A gap is a detector's observation on this node. Under a person's key it would be stamped a person row, an open

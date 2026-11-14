@@ -6,10 +6,15 @@ import { AUTHENTICATION } from "./shapes"
 
 // obo: the caller came from another node, with an on-behalf-of token its transport forwarded (who.keyId is the caller's key).
 // ownerKind: the key's class as identity marks it (person, operator, ...); records stamps a person's row only for "person".
-export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string }
-type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; obo?: { node: string; shape: string } } }
-type Known = { keyId: string; ownerKind?: string }
-const kindOf = (a: Answer): { ownerKind?: string } => typeof a.data.ownerKind === "string" ? { ownerKind: a.data.ownerKind } : {}
+// orgId: the org identity found for the caller's key (for an on-behalf-of token, the org the minting identity signed into
+// it from the caller's key), never a value the sender states.
+export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string; orgId?: string }
+type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; orgId?: unknown; obo?: { node: string; shape: string } } }
+type Known = { keyId: string; ownerKind?: string; orgId?: string }
+const kindOf = (a: Answer): { ownerKind?: string; orgId?: string } => ({
+  ...(typeof a.data.ownerKind === "string" ? { ownerKind: a.data.ownerKind } : {}),
+  ...(typeof a.data.orgId === "string" && a.data.orgId !== "" ? { orgId: a.data.orgId } : {}),
+})
 
 // Each key's answer is kept for reads, so identity is not asked on every read. A write asks identity afresh (fresh): a
 // key's class decides whether its row is a person's, so a mark identity gives or takes back counts from the next write,
@@ -55,6 +60,22 @@ const validate = async (key: string, fresh = false): Promise<Known | undefined> 
   const found: Known = { keyId: String(a.data.keyId), ...kindOf(a) }
   known.set(h, found)
   return found
+}
+
+// This records' own org: the org the same identity answers for this node's own key, asked again after a while so a key
+// moved to another org is not held to its old one. undefined when identity does not answer it (a cross-node write is
+// then refused, never taken on a guess).
+const ORG_TTL_MS = 300_000
+let own: { at: number; orgId?: string } | undefined
+export const ownOrg = async (): Promise<string | undefined> => {
+  if (own !== undefined && Date.now() - own.at < ORG_TTL_MS) {
+    return own.orgId
+  }
+  const a = await ask({ type: "apiKey", apiKey: KEY }).catch(() => undefined)
+  const orgId = a === undefined ? undefined : kindOf(a).orgId
+  // An unanswered ask is not kept: the next write asks again.
+  own = orgId === undefined ? undefined : { at: Date.now(), orgId }
+  return orgId
 }
 
 // This node's federation transport's peer id: the node an on-behalf-of token for this records must have been minted for.

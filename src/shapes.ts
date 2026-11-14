@@ -43,4 +43,7 @@ export const OPERATOR = "operator"
 // marks the key.
 export const UNMARKED = "unmarked"
 export const OWNER = "owner"
+// A key identity marks as another node's (issued when that node joined, named for it): the node's own key, held by every
+// vessel there, as this node's own key is held by every vessel here.
+export const PEER = "peer"
 export const TREATED = "treated"

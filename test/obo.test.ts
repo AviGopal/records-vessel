@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // A federation on-behalf-of token, forwarded by this node's transport as `Authorization: Bearer <token>`. records accepts it
 // only when identity answers the binding for exactly this node (its transport's peer id, from that transport's own row in
-// local discovery) and the shape being served, and with a caller key. A read is served; a write is refused until
-// identity marks whose key it is, whatever writer and role the body declares.
+// local discovery) and the shape being served, and with a caller key. A read is served. A write is taken exactly as the
+// caller key's write would be on its own node, and only from this records' org: another node's key (peer) writes that
+// node's rows as declared, never a person's, an operator's or the owner's; a person's key writes a person's row; any
+// other key's write is refused.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -13,12 +15,16 @@ const NODE_KEY = "node-key-for-test"
 const TRANSPORT = "federation-transport-vessel@obo-test"
 const SELF = "12D3KooWSelfPlaceholderPeer"
 const OTHER = "12D3KooWOtherPlaceholderPeer"
+const ORG = "orgs:fixture-one"
+const ELSEWHERE = "orgs:fixture-two"
 
 // identity's state: each token it minted, with its audience, caller key id and whether it has expired.
 // lies: identity answers this binding whatever audience was asked (records must check the answer itself).
-const tokens = new Map<string, { node: string; shape: string; keyId: string; expired?: boolean; session?: boolean; lies?: { node: string; shape: string } }>()
+// org: the org identity signed into the token from the caller's key (null: none); kind: the caller key's class.
+type Extra = { expired?: boolean; session?: boolean; keyId?: string; lies?: { node: string; shape: string }; org?: string | null; kind?: string }
+const tokens = new Map<string, { node: string; shape: string; keyId: string } & Extra>()
 let n = 0
-const token = (node: string, shape: string, extra: { expired?: boolean; session?: boolean; keyId?: string; lies?: { node: string; shape: string } } = {}): string => {
+const token = (node: string, shape: string, extra: Extra = {}): string => {
   const t = `obo-placeholder-${++n}`
   tokens.set(t, { node, shape, keyId: extra.keyId ?? "kid-caller", ...extra })
   return t
@@ -57,12 +63,18 @@ beforeAll(async () => {
   // authenticated with no on-behalf-of binding; an expired one is refused.
   identity = fake((_path, body) => {
     const p = body?.impulse?.pointer ?? {}
+    // The node's own key, as identity answers it: in this records' org.
+    if (p.type === "apiKey") {
+      return p.apiKey === NODE_KEY ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-node", orgId: ORG } }) : Response.json({ success: false }, { status: 401 })
+    }
     const t = tokens.get(String(p.token ?? ""))
     if (p.type !== "session" || t === undefined || t.expired) return Response.json({ success: false }, { status: 401 })
     if (t.session) return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId } })
     if (t.lies) return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId, obo: t.lies } })
     if (p.audience?.node !== t.node || p.audience?.shape !== t.shape) return Response.json({ success: false }, { status: 401 })
-    return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId, obo: { node: t.node, shape: t.shape } } })
+    const org = t.org === null ? {} : { orgId: t.org ?? ORG }
+    const kind = t.kind === undefined ? {} : { ownerKind: t.kind }
+    return Response.json({ success: true, data: { authenticated: true, keyId: t.keyId, ...org, ...kind, obo: { node: t.node, shape: t.shape } } })
   })
   dir = mkdtempSync(join(tmpdir(), "records-obo-"))
   port = freePort()
@@ -100,22 +112,78 @@ describe("records: a federation on-behalf-of token", () => {
     expect(asked).toEqual([{ node: SELF, shape: "record_read" }])
   })
 
-  test("[MUST-FAIL] a write is refused under any declared writer and role, and nothing is written", async () => {
-    const before = (await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape: "outcome" })).body.length
-    for (const as of [{}, { writer: "kid-x", role: "person" }, { writer: "walk-test", role: "owner" }, { writer: "walk-test", role: "walk" }]) {
-      const r = await call(`Bearer ${token(SELF, "record_write")}`, { type: "record_write", row: { shape: "outcome", r: 1 }, ...as })
-      expect([as, r.status, r.body?.failure?.body]).toEqual([as, 403, "cross-node writes wait for person marking"])
+  const count = async (shape: string): Promise<number> => (await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape })).body.length
+  const write = (extra: Extra, body: object) => call(`Bearer ${token(SELF, "record_write", extra)}`, { type: "record_write", ...body })
+
+  test("another node's key in this org writes that node's rows as declared: walk, described and gap", async () => {
+    // A described row cites the walk's selection it answers (records refuses one that cites none), as on its own node.
+    const sel = await write({ kind: "peer", keyId: "kid-node-two" }, { row: { shape: "selection", mark: "far-selection" }, writer: "walk-vessel", role: "walk" })
+    expect(sel.status).toBe(200)
+    const selId = (await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape: "selection" })).body.find((x: any) => x.mark === "far-selection").id
+    for (const [shape, writer, role] of [["hop", "walk-vessel", "walk"], ["land_verdict", "described-shape-vessel", "described"], ["gap", "pull-sync", "detector"]]) {
+      const r = await write({ kind: "peer", keyId: "kid-node-two" }, { row: { shape, mark: `far-${shape}`, selection_ref: selId }, writer, role })
+      expect([shape, r.status]).toEqual([shape, 200])
+      const back = (await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape })).body.filter((x: any) => x.mark === `far-${shape}`)
+      expect(back.map((x: any) => [x.writer, x.role])).toEqual([[writer, role]])
     }
-    expect((await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape: "outcome" })).body.length).toBe(before)
   })
 
-  test("[MUST-FAIL] a refused cross-node write is said in records' output, with the shape and never the token", async () => {
-    const t = token(SELF, "record_write")
-    const r = await call(`Bearer ${t}`, { type: "record_write", row: { shape: "note_from_far", text: "x" } })
+  test("[MUST-FAIL] another node's key writes no person's, operator's or owner row, and nothing is written", async () => {
+    const before = await count("outcome")
+    for (const role of ["person", "operator", "owner"]) {
+      const r = await write({ kind: "peer" }, { row: { shape: "outcome", r: 1 }, writer: "walk-vessel", role })
+      expect([role, r.status, r.body?.failure?.body]).toEqual([role, 403, "another node writes its own rows, never a person's, an operator's or this node's owner rows"])
+    }
+    expect(await count("outcome")).toBe(before)
+  })
+
+  test("[MUST-FAIL] a key in another org, or a token with no org, writes nothing, whatever its class", async () => {
+    const before = await count("hop")
+    for (const kind of ["peer", "person"]) {
+      const r = await write({ kind, org: ELSEWHERE }, { row: { shape: "hop" }, writer: "walk-vessel", role: "walk" })
+      expect([kind, r.status, r.body?.failure?.body]).toEqual([kind, 403, "a cross-node write is taken only from this records' org"])
+    }
+    const none = await write({ kind: "peer", org: null }, { row: { shape: "hop" }, writer: "walk-vessel", role: "walk" })
+    expect(none.status).toBe(403)
+    expect(none.body?.failure?.body).toContain("the caller's: not answered")
+    expect(await count("hop")).toBe(before)
+  })
+
+  test("[MUST-FAIL] an operator's key, and a key identity marks as neither a person's nor a node's, write nothing across nodes", async () => {
+    const before = await count("hop")
+    for (const kind of ["operator", "system", "unclassified", undefined]) {
+      const r = await write({ kind }, { row: { shape: "hop" }, writer: "walk-vessel", role: "walk" })
+      expect([kind, r.status, r.body?.failure?.body]).toEqual([kind, 403, "a cross-node write needs a key identity marks as a person's or another node's"])
+    }
+    expect(await count("hop")).toBe(before)
+  })
+
+  test("a person's key from another node of this org writes a person's row under its own key, whatever it declares", async () => {
+    const r = await write({ kind: "person", keyId: "kid-person" }, { row: { shape: "world_changed", what: "far-ask" }, writer: "walk-vessel", role: "walk" })
+    expect(r.status).toBe(200)
+    const back = (await call(`ApiKey ${NODE_KEY}`, { type: "record_read", shape: "world_changed" })).body.filter((x: any) => x.what === "far-ask")
+    expect(back.map((x: any) => [x.writer, x.role])).toEqual([["kid-person", "person"]])
+  })
+
+  test("[MUST-FAIL] a person's key writes no gap across nodes, as on its own node", async () => {
+    const before = await count("gap")
+    const r = await write({ kind: "person" }, { row: { shape: "gap", gap_id: "far" } })
+    expect([r.status, r.body?.failure?.body]).toEqual([403, "a gap row is written only under the node's own key"])
+    expect(await count("gap")).toBe(before)
+  })
+
+  test("[MUST-FAIL] another node's key must declare a writer and a role", async () => {
+    expect((await write({ kind: "peer" }, { row: { shape: "hop" } })).status).toBe(400)
+  })
+
+  test("[MUST-FAIL] a refused cross-node write is said in records' output, with the reason and the shape, never the token", async () => {
+    const t = token(SELF, "record_write", { kind: "unclassified" })
+    const r = await call(`Bearer ${t}`, { type: "record_write", row: { shape: "note_from_far", text: "x" }, writer: "w", role: "walk" })
     expect(r.status).toBe(403)
     await until(() => printed.includes("(shape=note_from_far)"), "the refusal line")
-    expect(printed).toContain("[records] refused a cross-node write: cross-node writes wait for person marking (shape=note_from_far)")
+    expect(printed).toContain("[records] refused a cross-node write: a cross-node write needs a key identity marks as a person's or another node's (shape=note_from_far)")
     expect(printed).not.toContain(t)
+    expect(printed).not.toContain(ORG)
   })
 
   test("[MUST-FAIL] a remote row's shape cannot forge a journal line or run past 64 characters in the refusal line", async () => {
