@@ -274,18 +274,19 @@ describe("records vessel", () => {
     const unclean = await grade([ask, answer, hop])
     const again = await grade([ask, answer])
     const read = await call(NODE_KEY, { type: "record_read", ids: [first, unclean, again] })
-    const by = new Map((read.body as any[]).map((r) => [r.id, [r.counted, r.why]]))
+    const by = new Map((read.body as any[]).map((r) => [r.id, [r.standing?.counted, r.standing?.why]]))
     expect([by.get(first), by.get(unclean), by.get(again)]).toEqual([[false, "replaced"], [false, "unclean"], [true, undefined]])
     // the stored rows are not changed: a read of another shape carries no standing
     const plain = await call(NODE_KEY, { type: "record_read", ids: [answer] })
-    expect((plain.body as any[])[0].counted).toBeUndefined()
-    // the standing is records' to say: an outcome a non-grader wrote claiming counted:true reads as no grade, and a
-    // grade's own stored why is replaced by the fold's
-    const forged = await id({ shape: "outcome", r: 1, event_ref: ask, input_refs: [ask, answer], counted: true }, as("walk-test", "walk"))
-    const claimed = await id({ shape: "outcome", r: 1, selection_ref: outcomeSel, event_ref: ask, input_refs: [ask, answer], why: "made up" }, as("described-test", "described"))
-    const again2 = await call(NODE_KEY, { type: "record_read", ids: [forged, claimed] })
-    const by2 = new Map((again2.body as any[]).map((r) => [r.id, [r.counted, r.why]]))
-    expect([by2.get(forged), by2.get(claimed)]).toEqual([[false, "not_a_grader"], [true, undefined]])
+    expect((plain.body as any[])[0].standing).toBeUndefined()
+    // the standing is records' to say: an outcome a non-grader wrote claiming a standing reads as no grade; and the
+    // writer's own why is kept as written, beside the fold's standing
+    const forged = await id({ shape: "outcome", r: 1, event_ref: ask, input_refs: [ask, answer], standing: { counted: true } }, as("walk-test", "walk"))
+    const reasoned = await id({ shape: "outcome", r: 1, selection_ref: outcomeSel, event_ref: ask, input_refs: [ask, answer], why: "the diff edits the wrong file" }, as("described-test", "described"))
+    const again2 = await call(NODE_KEY, { type: "record_read", ids: [forged, reasoned] })
+    const by2 = new Map((again2.body as any[]).map((r) => [r.id, r]))
+    expect(by2.get(forged).standing).toEqual({ counted: false, why: "not_a_grader" })
+    expect([by2.get(reasoned).why, by2.get(reasoned).standing]).toEqual(["the diff edits the wrong file", { counted: true }])
   })
 
   test("registers record_lapsed as a shape it serves", () => {
