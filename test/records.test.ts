@@ -7,6 +7,9 @@ import { type Fake, exitsNaming, fake, freePort, healthy, run, until } from "./h
 
 const NODE_KEY = "node-key-for-test"
 const PERSON_KEY = "person-key-for-test"
+const OPERATOR_KEY = "operator-key-for-test"
+const KINDLESS_KEY = "kindless-key-for-test"
+const DOWN_KEY = "identity-cannot-answer-for-test"
 
 let discovery: Fake
 let identity: Fake
@@ -38,10 +41,14 @@ const write = (key: string, row: object, as?: { writer: string; role: string }) 
 
 beforeAll(async () => {
   discovery = fake((path) => Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true }))
-  identity = fake((_path, body) =>
-    body?.impulse?.pointer?.apiKey === PERSON_KEY
-      ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-person" } })
-      : Response.json({ success: false }, { status: 401 }))
+  identity = fake((_path, body) => {
+    const k = body?.impulse?.pointer?.apiKey
+    if (k === PERSON_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-person", ownerKind: "person" } })
+    if (k === OPERATOR_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-operator", ownerKind: "operator" } })
+    if (k === KINDLESS_KEY) return Response.json({ success: true, data: { authenticated: true, keyId: "kid-kindless" } })
+    if (k === DOWN_KEY) return new Response("identity is down", { status: 503 })
+    return Response.json({ success: false }, { status: 401 })
+  })
   dir = mkdtempSync(join(tmpdir(), "records-test-"))
   port = freePort()
   vessel = run("src/index.ts", env())
@@ -108,6 +115,16 @@ describe("records vessel", () => {
     const ok = await write(NODE_KEY, { shape: "gap", gap_id: "g1", status: "open", summary: "x" }, { writer: "pull-sync", role: "detector" })
     expect(ok.status).toBe(200)
     expect(ok.body.role).toBe("detector")
+  })
+
+  test("[MUST-FAIL] only a key identity marks as a person's writes as a person; any other key writes as an operator", async () => {
+    const as = async (key: string) => ((await write(key, { shape: "note", text: key })).body as { role?: string; writer?: string })
+    expect(await as(PERSON_KEY)).toMatchObject({ role: "person", writer: "kid-person" })
+    expect(await as(OPERATOR_KEY)).toMatchObject({ role: "operator", writer: "kid-operator" })
+    expect(await as(KINDLESS_KEY)).toMatchObject({ role: "operator", writer: "kid-kindless" }) // identity said nothing: not a person
+    // identity unable to answer: refused, never written as a person
+    const down = await write(DOWN_KEY, { shape: "note", text: "x" })
+    expect(down.status).toBe(401)
   })
 
   test("a key identity rejects gets 401", async () => {

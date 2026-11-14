@@ -5,10 +5,15 @@ import { DISCOVERY_RESOLVE, IDENTITY_RESOLVE } from "./routes"
 import { AUTHENTICATION } from "./shapes"
 
 // obo: the caller came from another node, with an on-behalf-of token its transport forwarded (who.keyId is the caller's key).
-export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean }
-type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; obo?: { node: string; shape: string } } }
+// ownerKind: the key's class as identity marks it (person, operator, ...); records stamps a person's row only for "person".
+export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string }
+type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; obo?: { node: string; shape: string } } }
+type Known = { keyId: string; ownerKind?: string }
+const kindOf = (a: Answer): { ownerKind?: string } => typeof a.data.ownerKind === "string" ? { ownerKind: a.data.ownerKind } : {}
 
-const known = new Map<string, string>()
+// Each key's answer is kept for the life of the process: identity is asked once per key. So a key's class marked after
+// this process started is read when the process next starts (records restarts on install).
+const known = new Map<string, Known>()
 
 const digest = (key: string): Buffer => new Bun.CryptoHasher("sha256").update(key).digest()
 
@@ -36,7 +41,7 @@ const ask = async (pointer: Record<string, unknown>): Promise<Answer | undefined
   return a
 }
 
-const validate = async (key: string): Promise<string | undefined> => {
+const validate = async (key: string): Promise<Known | undefined> => {
   const h = digest(key).toString("hex")
   const hit = known.get(h)
   if (hit !== undefined) {
@@ -46,8 +51,9 @@ const validate = async (key: string): Promise<string | undefined> => {
   if (a === undefined) {
     return undefined
   }
-  known.set(h, String(a.data.keyId))
-  return String(a.data.keyId)
+  const found: Known = { keyId: String(a.data.keyId), ...kindOf(a) }
+  known.set(h, found)
+  return found
 }
 
 // This node's federation transport's peer id: the node an on-behalf-of token for this records must have been minted for.
@@ -88,7 +94,7 @@ const transportPeer = async (): Promise<string> => {
 // exactly this node and the shape being served. A session token identity accepts carries no binding and is refused, and a
 // token with no caller key names nobody to write as. Identity is asked every time: a token lives seconds and each dial
 // mints a new one, so a cached answer would only ever be one that outlived its token.
-const onBehalfOf = async (token: string, shape: string): Promise<string | undefined> => {
+const onBehalfOf = async (token: string, shape: string): Promise<Known | undefined> => {
   const node = await transportPeer()
   if (node === "" || shape === "") {
     return undefined
@@ -97,22 +103,22 @@ const onBehalfOf = async (token: string, shape: string): Promise<string | undefi
   if (a === undefined || a.data.obo?.node !== node || a.data.obo?.shape !== shape || !a.data.keyId) {
     return undefined
   }
-  return String(a.data.keyId)
+  return { keyId: String(a.data.keyId), ...kindOf(a) }
 }
 
 export const authenticate = async (req: Request, shape: string): Promise<Who> => {
   const bearer = /^Bearer (\S+)$/.exec(header(req))
   if (bearer !== null) {
-    const keyId = await onBehalfOf(bearer[1] as string, shape)
-    return keyId === undefined ? { ok: false, self: false, keyId: "" } : { ok: true, self: false, keyId, obo: true }
+    const found = await onBehalfOf(bearer[1] as string, shape)
+    return found === undefined ? { ok: false, self: false, keyId: "" } : { ok: true, self: false, ...found, obo: true }
   }
   const key = keyOf(req)
   if (timingSafeEqual(digest(key), OWN)) {
     return { ok: true, self: true, keyId: "" }
   }
-  const keyId = await validate(key)
-  if (keyId === undefined) {
+  const found = await validate(key)
+  if (found === undefined) {
     return { ok: false, self: false, keyId: "" }
   }
-  return { ok: true, self: false, keyId }
+  return { ok: true, self: false, ...found }
 }

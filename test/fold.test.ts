@@ -37,6 +37,17 @@ describe("posterior fold", () => {
     expect(F.grades([...base, g], seq, seq).at(-1)).toMatchObject({ ok: true }) // closing and lapses still read it
   })
 
+  test("[MUST-FAIL] an operator's ask is worked like any ask, but an operator's own grade is no verdict: it originates nothing", () => {
+    const opAsk = row("world_changed", "operator", { what: "q", writer: "kid-operator" })
+    const opSel = row("selection", "walk", { arm: "treated", cell: "op-c", pool_refs: [opAsk.id] })
+    const opAnswer = row("answer", "described", { selection_ref: opSel.id, producer: "model-a", input_refs: [opAsk.id] })
+    const at = (rows: Row[], cell: string) => fold([...base, opAsk, opSel, opAnswer, ...rows], [cell], seq, seq)[0]
+    const opGrade = row("outcome", "operator", { r: 1, writer: "kid-operator", input_refs: [opAnswer.id] })
+    expect(at([opGrade], "op-c")).toEqual({ cell: "op-c", ...still })
+    const personVerdict = row("outcome", "person", { r: 1, input_refs: [opAnswer.id] })
+    expect(at([personVerdict], "op-c")).toEqual({ cell: "op-c", ...moved }) // a person's verdict on it still credits
+  })
+
   test("[MUST-FAIL] a person's verdict credits the answer's cell, and an earlier step only through what the answer consumed", () => {
     expect(post([verdict({})], "c")).toEqual({ cell: "c", ...moved })
     expect(post([verdict({})], "step")).toEqual({ cell: "step", ...still }) // in the pool, never consumed: nothing

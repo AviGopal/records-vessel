@@ -36,5 +36,8 @@ export const WALK = "walk"
 export const RECORDS = "records"
 export const DESCRIBED = "described"
 export const PERSON = "person"
+// A key identity validates that is not marked a person's (an operator's or an agent's cockpit key, a tool's): its rows
+// are asks and evidence like a person's, never a person's verdict.
+export const OPERATOR = "operator"
 export const OWNER = "owner"
 export const TREATED = "treated"

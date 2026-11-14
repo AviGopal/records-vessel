@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-import { CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
 
-const GIVEN = new Set([PERSON, OWNER])
+// Rows a grade may take as given evidence: what a person, the owner or an operator asked or said. Only a person's grade
+// is a verdict (GRADERS, and the o.role === PERSON checks below): an operator's grade counts for nothing.
+const GIVEN = new Set([PERSON, OWNER, OPERATOR])
 const GRADERS = new Set([DESCRIBED, PERSON])
 
 // by: the grader's role (person, or described for the walk's own outcome); deadline: the judged row is a deadline, so

@@ -12,6 +12,7 @@ import { type Fake, fake, freePort, healthy, run, until } from "./harness"
 
 const NODE_KEY = "node-key-for-test"
 const PERSON_KEY = "person-key-for-test"
+const OPERATOR_KEY = "operator-key-for-test"
 const WALK = "walk-test"
 const walk = { writer: WALK, role: "walk" }
 const desc = { writer: "described-test", role: "described" }
@@ -24,8 +25,10 @@ afterEach(() => stop())
 const fresh = async () => {
   const discovery: Fake = fake((path) => Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true }))
   const identity: Fake = fake((_p, body) => body?.impulse?.pointer?.apiKey === PERSON_KEY
-    ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-person" } })
-    : Response.json({ success: false }, { status: 401 }))
+    ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-person", ownerKind: "person" } })
+    : body?.impulse?.pointer?.apiKey === OPERATOR_KEY
+      ? Response.json({ success: true, data: { authenticated: true, keyId: "kid-operator", ownerKind: "operator" } })
+      : Response.json({ success: false }, { status: 401 }))
   const dir = mkdtempSync(join(tmpdir(), "records-episode-"))
   const port = freePort()
   const vessel = run("src/index.ts", {
@@ -463,6 +466,20 @@ describe("the walk's episode", () => {
   })
 
   // A run that reached: the ask, a call that ended in its work, an answer, and a person's verdict on it.
+  test("[MUST-FAIL] an operator's ask is a request the walk works; an operator's r 1 on its answer closes nothing", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = (await r.write(OPERATOR_KEY, { shape: "world_changed", what: "an operator's ask" })) as { id: string; role: string }
+    expect(a.role).toBe("operator")
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).toContain(a.id)
+    const sel = await r.select(a.id)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "done", selection_ref: sel.id, input_refs: [a.id] }, desc)
+    await r.write(OPERATOR_KEY, { shape: "outcome", r: 1, input_refs: [answer.id] })
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).toContain(a.id) // not a person's verdict: still open
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [answer.id] })
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id) // a person's closes it
+  })
+
   const reached = async (r: Awaited<ReturnType<typeof fresh>>, verdict: number | null) => {
     await r.arm()
     const a = await r.ask("make the change")

@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { blames, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -21,7 +21,9 @@ export type Query = {
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY])
-const EXO_ROLES = new Set([PERSON, OWNER])
+// Whose rows are asks and what the walk answers (the roots, what wakes a wait, whose deadlines lapse): a person's, the
+// owner's, and an operator's. Only a person's are verdicts (closed, earned, below).
+const EXO_ROLES = new Set([PERSON, OWNER, OPERATOR])
 const MINE = new Set([SELECTION, HOP, FAILURE])
 const FILE = join(DATA_DIR, "rows")
 

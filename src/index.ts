@@ -4,7 +4,7 @@ import { PORT, VESSEL_ID } from "./config"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { GAP, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
+import { GAP, OPERATOR, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE } from "./shapes"
 import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -43,7 +43,10 @@ const HANDLERS = new Map<string, Handler>([
       if (String(p.row?.shape) === GAP) {
         return fail(403, "a gap row is written only under the node's own key")
       }
-      const out = write(p.row, who.keyId, PERSON)
+      // A person's row only under a key identity marks as a person's own; any other key (an operator's, an agent's
+      // cockpit key, a tool's, or one identity said nothing of) writes as an operator: its asks are asks, never a
+      // person's verdict.
+      const out = write(p.row, who.keyId, who.ownerKind === PERSON ? PERSON : OPERATOR)
       return answer(out.status, out.body)
     }
     if (p.writer === undefined || p.role === undefined) {
