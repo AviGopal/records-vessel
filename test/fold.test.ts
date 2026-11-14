@@ -48,6 +48,15 @@ describe("posterior fold", () => {
     expect(at([personVerdict], "op-c")).toEqual({ cell: "op-c", ...moved }) // a person's verdict on it still credits
   })
 
+  test("[MUST-FAIL] the walk's grade of an answer to an operator's ask is a counted grade: the ask is given evidence, as a person's is", () => {
+    const opAsk = row("world_changed", "operator", { what: "q", writer: "kid-operator" })
+    const opSel = row("selection", "walk", { arm: "treated", cell: "op-g", pool_refs: [opAsk.id] })
+    const opAnswer = row("answer", "described", { selection_ref: opSel.id, producer: "model-a", input_refs: [opAsk.id] })
+    const g = row("outcome", "described", { r: 1, selection_ref: outcomeSel.id, producer: "model-a", input_refs: [opAsk.id, opAnswer.id] })
+    // closing and lapse detection read whether it counts: the operator's ask is what it judged the answer against
+    expect(F.grades([...base, opAsk, opSel, opAnswer, g], seq, seq).at(-1)).toMatchObject({ ok: true })
+  })
+
   test("[MUST-FAIL] a person's verdict credits the answer's cell, and an earlier step only through what the answer consumed", () => {
     expect(post([verdict({})], "c")).toEqual({ cell: "c", ...moved })
     expect(post([verdict({})], "step")).toEqual({ cell: "step", ...still }) // in the pool, never consumed: nothing
