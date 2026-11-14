@@ -2,7 +2,7 @@
 import { appendFileSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
-import { blames, standing } from "./fold"
+import { blames, grades, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
@@ -433,6 +433,23 @@ export const projected = (rs: Row[]): Row[] => {
   })
 }
 
+// Whether each grade counted, as the fold decides it, on the outcome rows a read returns: counted, or why not (the fold's
+// own reason, or "replaced" when the same writer graded the same answer again later). A reader shown a grade is shown
+// its standing, so a grade the fold refused is never taken for one that counts. Computed once per sequence number and
+// put on copies: the stored rows are never changed.
+let standingAt: { seq: number; why: Map<string, { counted: boolean; why?: string }> } | undefined
+const withStanding = (out: Row[]): Row[] => {
+  if (!out.some((r) => r.shape === OUTCOME)) return out
+  if (standingAt?.seq !== seq) {
+    const all = grades(rows, seq, seq)
+    const stands = new Set(standing(rows, seq, seq).map((g) => g.id))
+    const why = new Map(all.map((g) => [g.id, stands.has(g.id) ? { counted: true } : { counted: false, why: g.refused ?? "replaced" }]))
+    standingAt = { seq, why }
+  }
+  const m = standingAt.why
+  return out.map((r) => r.shape === OUTCOME && m.has(r.id) ? { ...r, ...m.get(r.id) } : r)
+}
+
 export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> => {
   if (typeof q.root === "string" && q.calls === "all") return rootCalls(q.root, q.output !== false)
   if (typeof q.call_id === "string") return oneCall(q.call_id)
@@ -442,5 +459,5 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
     const all = episodes(q.episode)
     return { shared: projected(all.shared), roots: all.roots.map((x) => ({ ...x, rows: projected(x.rows) })) }
   }
-  return read(q)
+  return withStanding(read(q))
 }

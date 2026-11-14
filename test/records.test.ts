@@ -257,6 +257,30 @@ describe("records vessel", () => {
     expect(((await pending).body as { shape: string }).shape).toBe("wait_probe")
   })
 
+  test("[MUST-FAIL] a read shows each grade's standing: counted, or why not (the fold's reason, or replaced)", async () => {
+    const as = (writer: string, role: string) => ({ writer, role })
+    const id = async (row: object, who: { writer: string; role: string }) => {
+      const r = await write(NODE_KEY, row, who)
+      expect(r.status).toBe(200)
+      return String(r.body.id)
+    }
+    const ask = await id({ shape: "world_changed", what: "standing?" }, as("owner-test", "owner"))
+    const answerSel = await id({ shape: "selection", arm: "treated", cell: "st-c" }, as("walk-test", "walk"))
+    const outcomeSel = await id({ shape: "selection", arm: "treated", cell: "st-judge" }, as("walk-test", "walk"))
+    const answer = await id({ shape: "answer", text: "a", selection_ref: answerSel, input_refs: [ask] }, as("described-test", "described"))
+    const hop = await id({ shape: "hop", output: { text: "draft" } }, as("walk-test", "walk"))
+    const grade = (input_refs: string[]) => id({ shape: "outcome", r: 1, selection_ref: outcomeSel, event_ref: ask, input_refs }, as("described-test", "described"))
+    const first = await grade([ask, answer])
+    const unclean = await grade([ask, answer, hop])
+    const again = await grade([ask, answer])
+    const read = await call(NODE_KEY, { type: "record_read", ids: [first, unclean, again] })
+    const by = new Map((read.body as any[]).map((r) => [r.id, [r.counted, r.why]]))
+    expect([by.get(first), by.get(unclean), by.get(again)]).toEqual([[false, "replaced"], [false, "unclean"], [true, undefined]])
+    // the stored rows are not changed: a read of another shape carries no standing
+    const plain = await call(NODE_KEY, { type: "record_read", ids: [answer] })
+    expect((plain.body as any[])[0].counted).toBeUndefined()
+  })
+
   test("registers record_lapsed as a shape it serves", () => {
     const body = discovery.seen.find((s) => s.path === "/register")?.body as { shapes: string[] }
     expect(body.shapes).toContain("record_lapsed")

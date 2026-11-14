@@ -12,7 +12,7 @@ const GRADERS = new Set([DESCRIBED, PERSON])
 // by: the grader's role (person, or described for the walk's own outcome); deadline: the judged row is a deadline, so
 // a counted grade of it at r 0 is a lapse.
 // refused: why a grade does not count, when it does not (the first reason that applies).
-export type Grade = { ok: boolean; r: number; judged: string; key: string; cells: Set<string>; weights: Map<string, number>; by: string; deadline: boolean; refused?: string }
+export type Grade = { id: string; ok: boolean; r: number; judged: string; key: string; cells: Set<string>; weights: Map<string, number>; by: string; deadline: boolean; refused?: string }
 
 // What the owner's credits row for target "selection" says about how credit travels: the weight each kind of
 // origination carries, the discount per consumption edge (gamma) and how far it goes (depth). The row is the only
@@ -181,7 +181,7 @@ export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
         weights.set(c, Math.max(weights.get(c) ?? 0, g))
       }
     }
-    return { ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(weights.keys()), weights, by: String(o.role), deadline, ...(refused ? { refused } : {}) }
+    return { id: o.id, ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(weights.keys()), weights, by: String(o.role), deadline, ...(refused ? { refused } : {}) }
   }
   return seen
     .filter((r) => r.shape === OUTCOME)
@@ -247,7 +247,7 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
     const asked = s.from === undefined ? undefined : byId.get(String(s.from))
     const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
     const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s
-    out.set(s.id, { ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), weights: new Map([[String(chose.cell), 1]]), by: WALK, deadline: false })
+    out.set(s.id, { id: f.id, ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), weights: new Map([[String(chose.cell), 1]]), by: WALK, deadline: false })
   }
   return [...out.values()]
 }
@@ -292,7 +292,7 @@ export const gapClosures = (all: Row[], asOf: number, atSeq: number): Grade[] =>
         const ids = new Set(chain.map((s) => s.id))
         const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
         out.push({
-          ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
+          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
           weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),
           by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
         })
