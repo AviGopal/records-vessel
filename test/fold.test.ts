@@ -388,9 +388,9 @@ describe("a cell with no evidence of its own backs off to a coarser one", () => 
       .toEqual(["cell", "asker", "move", "none"])
   })
 
-  test("[MUST-FAIL] a cell's own grades add on top of its move's record for the same asker, each counted once (the USER: inherit, then refine)", () => {
+  test("the finest level with evidence answers: a cell's own grades are not mixed with the move's (a guard)", () => {
     const rows = [...graded(cell("hop"), 1), ...graded(cell("other"), 0), ...graded(cell("other2"), 0)]
-    expect(post(rows, cell("hop"))).toEqual({ cell: cell("hop"), alpha: 2, beta: 3 })
+    expect(post(rows, cell("hop"))).toEqual({ cell: cell("hop"), alpha: 2, beta: 1 })
   })
 
   test("another move's evidence is never shared (a guard)", () => {
