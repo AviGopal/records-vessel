@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -104,7 +104,7 @@ export const reached = (index: Index, start: string, t: Travel): Map<string, num
 
 // Every grade among the rows, with whether it counts and what it judges. The fold folds the ones that count; the
 // lapse detector uses the same answer, so a grade the fold refuses never hides a lapse.
-export const grades = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
@@ -235,7 +235,7 @@ const blamed = (f: Row): string => typeof f.blames === "string" ? f.blames
 // the move itself. Either way: treated, by the walk that wrote the failure; once per failing selection; never a chain,
 // since nothing was produced. Kept apart from grades(): what closes a request and what lapses never read it, and its key
 // cannot replace a grade's.
-export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const byId = new Map(seen.map((r) => [r.id, r]))
@@ -263,7 +263,7 @@ export const moveFailures = (all: Row[], asOf: number, atSeq: number): Grade[] =
 // never read it. With no credits row, nothing is credited.
 // Residual (debt): an operator fix that lands beside a walk landing on the same gap still credits the walk; a closing
 // row citing what its check judged would tie it causally.
-export const gapClosures = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
   const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
@@ -309,6 +309,32 @@ export const gapClosures = (all: Row[], asOf: number, atSeq: number): Grade[] =>
 // counted evidence of its own backs off to a coarser one that has some: the same move for the same asker, then the same
 // move anywhere. The finest level with evidence answers, each grade counted once, and the answer says which (from).
 // An owner prior still belongs to the exact cell.
+// GRADES ARE COMPUTED ONCE PER (asOf, atSeq) OVER ONE ROW LIST. The posterior a walk reads, its tally, closing,
+// lapses and each outcome's standing all ask the same grades of the same rows: computed apart, each read redid the
+// whole fold. The rows are append-only, so an answer for a list holds while the list's length is unchanged; the cache
+// is per list (a test's own list is its own), holds a few (asOf, atSeq) pairs, and is the fold's own answer kept, not
+// state of its own: nothing is persisted or served, and what it returns is what the computation returns (V2 below).
+// Callers must not change what it returns (none does: they filter and map).
+const memo = (f: (all: Row[], asOf: number, atSeq: number) => Grade[]) => {
+  const byList = new WeakMap<Row[], { n: number; at: Map<string, Grade[]> }>()
+  return (all: Row[], asOf: number, atSeq: number): Grade[] => {
+    let c = byList.get(all)
+    if (c === undefined || c.n !== all.length) { c = { n: all.length, at: new Map() }; byList.set(all, c) }
+    const k = `${asOf}|${atSeq}`
+    const hit = c.at.get(k)
+    if (hit !== undefined) return hit
+    const v = f(all, asOf, atSeq)
+    if (c.at.size >= 8) c.at.delete(c.at.keys().next().value as string)
+    c.at.set(k, v)
+    return v
+  }
+}
+export const grades = memo(gradesOf)
+export const moveFailures = memo(moveFailuresOf)
+export const gapClosures = memo(gapClosuresOf)
+// The same, computed fresh: what a check compares the kept answers with.
+export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf }
+
 type Level = "cell" | "asker" | "move" | "none"
 const move = (c: string): string => c.split("|")[0]
 const asker = (c: string): string | undefined => c.split("|").slice(1).join("|").split(",").find((t) => t.startsWith("asker:"))
@@ -347,3 +373,31 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
 
 export const fold = (all: Row[], cells: string[], asOf: number, atSeq: number): Post[] =>
   foldFrom(all, cells, asOf, atSeq).map(({ cell, alpha, beta }) => ({ cell, alpha, beta }))
+
+// V1: A SELECTION'S POSTERIOR IS THE FOLD'S, REFOLDED FROM THE ROWS. A selection records the posterior it drew its
+// chosen cell from (posts, in its cands' order) and the sequence number records answered at (posts_seq); the walk asked
+// with its arm row's as_of_seq. Refolding that cell from the rows at that point must give the same alpha and beta: a
+// kept answer (the memo above, or any later shortcut) that drifted from the rows shows here. Returns each mismatch
+// (an empty list when every sampled selection agrees). Selections that do not say enough to refold are skipped and
+// counted, so a check that read nothing does not pass as one that agreed.
+export type V1 = { checked: number; skipped: number; mismatches: Array<{ selection: string; cell: string; recorded: Post; refolded: Post }> }
+export const verifySelections = (all: Row[], sample: Row[]): V1 => {
+  const out: V1 = { checked: 0, skipped: 0, mismatches: [] }
+  const arms = all.filter((r) => r.shape === ARM)
+  for (const s of sample) {
+    const cands = Array.isArray(s.cands) ? (s.cands as Array<{ id?: unknown; root?: unknown }>) : []
+    const posts = Array.isArray(s.posts) ? (s.posts as Array<{ alpha?: unknown; beta?: unknown }>) : []
+    const j = cands.findIndex((c) => c.id === s.a && (s.root === undefined || c.root === s.root))
+    const arm = arms.filter((r) => r.seq < s.seq && r.vessel_id === s.writer).at(-1)
+    const at = Number(s.posts_seq)
+    if (s.shape !== SELECTION || typeof s.cell !== "string" || j < 0 || posts[j] === undefined || arm === undefined || !Number.isFinite(at)) {
+      out.skipped++; continue
+    }
+    const recorded = { cell: s.cell, alpha: Number(posts[j].alpha), beta: Number(posts[j].beta) }
+    const [p] = foldFrom(all, [s.cell], Number(arm.as_of_seq), at)
+    const refolded = { cell: s.cell, alpha: p.alpha, beta: p.beta }
+    out.checked++
+    if (Math.abs(refolded.alpha - recorded.alpha) > 1e-9 || Math.abs(refolded.beta - recorded.beta) > 1e-9) out.mismatches.push({ selection: s.id, cell: s.cell, recorded, refolded })
+  }
+  return out
+}
