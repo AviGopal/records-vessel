@@ -24,9 +24,11 @@ const chain = () => {
   const diffReq = add(row("request", "described", { selection_ref: reqSel.id, input_refs: [ask.id, edited.id], uses: [edited.id], pointer: { type: "git_diff" } }))
   const diffSel = add(row("selection", "walk", { arm: "treated", cell: CELLS[2], a: "call/git_diff", from: diffReq.id, root: ask.id }))
   const diff = add(row("gitDiff", "walk", { selection_ref: diffSel.id, call_id: "cd", tree: "T1", input_refs: [ask.id] }))
+  const failEdit = () => add(row("failure", "walk", { selection_ref: editSel.id, call_id: "ce", status: 422 }))
+  const asControl = () => { diffSel.arm = "control" }
   const verdict = (role: string, r: number, extra: Record<string, unknown> = {}) => add(row("land_verdict", role, { r, tree: "T1", input_refs: [ask.id, diff.id], ...extra }))
   const posts = () => fold(rows, CELLS, 1e9, 1e9)
-  return { rows, verdict, posts }
+  return { rows, verdict, posts, failEdit, asControl }
 }
 
 describe("a person's verdict on a landing", () => {
@@ -57,6 +59,21 @@ describe("a person's verdict on a landing", () => {
     c.verdict("person", 0, { writer: "p1" })
     c.verdict("person", 1, { writer: "p1" })
     expect(c.posts()[2]).toMatchObject({ alpha: 2, beta: 1 })
+  })
+
+  test("[MUST-FAIL] a step in the chain that failed is not credited by the landing it fed", () => {
+    const c = chain()
+    c.failEdit()
+    c.verdict("person", 1)
+    // the edit's own failure debits it as before (its beta); the landing adds no alpha to it
+    expect(c.posts().map((p) => p.alpha)).toEqual([1, 1 + 0.5, 1 + 1])
+  })
+
+  test("[MUST-FAIL] a diff made by a control-arm selection grades nothing", () => {
+    const c = chain()
+    c.asControl()
+    c.verdict("person", 1)
+    expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
   })
 
   test("a pool with no land_verdict is folded exactly as before (no land grades)", () => {
