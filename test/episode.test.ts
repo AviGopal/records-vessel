@@ -499,6 +499,17 @@ describe("the walk's episode", () => {
     expect(arm.id).toBeDefined()
   })
 
+  test("[MUST-FAIL] a gap its detector marks walkable false is shown, not worked: not a root, until a later row says otherwise", async () => {
+    const r = await fresh()
+    await r.arm()
+    const infra = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-infra", status: "open", walkable: false }, detector)
+    const open = await gap(r, "g-work", "open")
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([open.id])
+    expect(((await r.call(NODE_KEY, { type: "record_read", shape: "gap", ids: [infra.id] })) as unknown[]).length).toBe(1) // shown: the row is there to read
+    const work = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-infra", status: "open", walkable: true }, detector)
+    expect((await r.episodes()).roots.map((x) => x.root.id).sort()).toEqual([work.id, open.id].sort())
+  })
+
   test("a person's grade on a gap row neither lifts a hold, closes a gap nor is a root: only a detector's row does (a guard)", async () => {
     const r = await fresh()
     const arm = await r.arm()
