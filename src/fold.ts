@@ -19,7 +19,7 @@ export type Grade = { id: string; ok: boolean; r: number; judged: string; key: s
 // source of these (design: enablement-credit section 1). With no row, or a row with any field missing or out of range
 // (the row is then unusable whole, not patched field by field), nothing travels: a grade credits only the selection
 // that made the row it judged, counted once, unscaled. Either is said on records' output, once per change.
-export type Travel = { w_person: number; w_lapse: number; w_close: number; gamma: number; depth: number; prior_count?: number }
+export type Travel = { w_person: number; w_lapse: number; w_close: number; gamma: number; depth: number; w_check?: number; promise_window?: number; prior_count?: number }
 type Required = "w_person" | "w_lapse" | "w_close" | "gamma" | "depth"
 const BOUNDS: Record<Required, [number, number]> = { w_person: [0, 10], w_lapse: [0, 10], w_close: [0, 10], gamma: [0, 1], depth: [0, 64] }
 let said = ""
@@ -36,13 +36,17 @@ const travelOf = (seen: Row[]): Travel | undefined => {
   })
   const id = String(row.id).replace(/[^A-Za-z0-9_.:-]/g, "?").slice(0, 64)
   if (bad !== undefined) { say(`credits selection row ${id} ignored: ${bad} missing or out of range; depth 0 only`); return undefined }
+  // A promise's weight and window are optional: a row without both (or with either out of range) settles no promise,
+  // and no value is assumed in their place (law 1: the owner's row is the only source).
+  const wc = row.w_check, pw = row.promise_window
+  const promises = typeof wc === "number" && Number.isFinite(wc) && wc >= 0 && wc <= 10 && typeof pw === "number" && Number.isInteger(pw) && pw >= 1 && pw <= 64
   // A cap on how much of a coarser level's record a cell inherits (prior_count): optional; with none the whole record
   // is inherited (the USER: inherit, then refine), never a value assumed in its place.
   const pc = row.prior_count
   const nested = typeof pc === "number" && Number.isFinite(pc) && pc > 0 && pc <= 1000
-  say(`credits selection row ${id} used${nested ? `; inheritance capped at ${Number(pc)}` : ""}`)
+  say(`credits selection row ${id} used${promises ? "" : "; no promise weight and window: promises settle nothing"}${nested ? `; inheritance capped at ${Number(pc)}` : ""}`)
   return { w_person: Number(row.w_person), w_lapse: Number(row.w_lapse), w_close: Number(row.w_close), gamma: Number(row.gamma), depth: Number(row.depth),
-    ...(nested ? { prior_count: Number(pc) } : {}) }
+    ...(promises ? { w_check: Number(wc), promise_window: Number(pw) } : {}), ...(nested ? { prior_count: Number(pc) } : {}) }
 }
 
 const shapeOf = (e: unknown): string => typeof e === "object" && e !== null ? String((e as { shape?: unknown }).shape) : String(e)
@@ -315,6 +319,87 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // counted evidence of its own backs off to a coarser one that has some: the same move for the same asker, then the same
 // move anywhere. The finest level with evidence answers, each grade counted once, and the answer says which (from).
 // An owner prior still belongs to the exact cell.
+// A PROMISE IS SETTLED BY WHAT THE WALK DID NEXT (enablement-credit design §12.1; the USER: "Credit kept, penalise
+// broken"). On a root whose latest change_wanted says wanted: true, an answer may promise its next act: next_act
+// {tool, target}, a field of its schema, never read from prose. The root's next N selections after the answer (N: the
+// owner's promise_window) settle it:
+//   - kept: one of them did that act: a call of that tool (its started hop's pointer_type) whose request's pointer names
+//     the target (a pointer field equal to it, or a path ending in /target: loose, on purpose), or a run of a template
+//     with such a call: r 1, when the tool is an act (the owner's requires rows gate it on a wanted change); a kept
+//     promise of anything else earns nothing. A call that starts and is then refused or cut is still kept; its own
+//     failure is graded as a move (moveFailures);
+//   - broken: N of the root's selections passed and none was such a call: r 0;
+//   - neither yet (fewer than N have passed), or the root has no wanted: true: no grade.
+// Only the walk's own call hops count; an answer or described row naming the act is no evidence. The grade judges the
+// selection that produced the answer, and travels back along consumption like any other origination (foldFrom), at
+// the owner's w_check. With no promise weight and window on the credits row, nothing is settled.
+const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const t = travelOf(seen)
+  if (t?.promise_window === undefined || t.w_check === undefined) return []
+  const n = t.promise_window
+  // Built once per call: rows by id, each root's selections in order, each root's change_wanted judgments in order.
+  const byId = new Map(seen.map((r) => [r.id, r]))
+  const byRoot = new Map<string, Row[]>()
+  for (const x of seen.filter((r) => r.shape === SELECTION).sort((a, b) => a.seq - b.seq)) {
+    if (typeof x.root !== "string") continue
+    if (!byRoot.has(x.root)) byRoot.set(x.root, [])
+    byRoot.get(x.root)!.push(x)
+  }
+  const wantedRows = new Map<string, Row[]>()
+  for (const w of seen.filter((r) => r.shape === "change_wanted").sort((a, b) => a.seq - b.seq)) {
+    for (const root of [w.input_refs].flat().map(String)) {
+      if (!wantedRows.has(root)) wantedRows.set(root, [])
+      wantedRows.get(root)!.push(w)
+    }
+  }
+  const wanted = (root: string, before: number): boolean => (wantedRows.get(root) ?? []).filter((w) => w.seq < before).at(-1)?.wanted === true
+  // Which tools are acts: the ones the owner's requires rows gate on a wanted change (the owner's word, read here, not
+  // a list in records). Keeping a promise of anything else earns nothing; breaking one is still broken.
+  const acts = new Set(seen.filter((r) => r.shape === "requires" && r.role === OWNER && r.needs === "change_wanted" && r.retired !== true).map((r) => String(r.for)))
+  const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started").map((r) => [String(r.selection_ref), r]))
+  // The target matches loosely, on purpose: any string field of the call's pointer equal to it, or a path ending in
+  // /target (the clone's absolute path ends in the repository's relative one).
+  const names = (pointer: unknown, target: string): boolean => typeof pointer === "object" && pointer !== null
+    && Object.values(pointer as Record<string, unknown>).some((v) => typeof v === "string" && (v === target || v.endsWith(`/${target}`)))
+  // Whether a selection did the promised act: a call (its started hop names the tool, its request's pointer the target),
+  // or a run of a template one of whose calls is that tool on that target.
+  const did = (x: Row, tool: string, target: string): boolean => {
+    if (started.get(x.id) === undefined) return false
+    const a = String(x.a ?? "")
+    if (a.startsWith("run/")) {
+      const calls = byId.get(a.slice("run/".length))?.calls
+      return Array.isArray(calls) && calls.some((c) => typeof c === "object" && c !== null && (c as Row).shape === tool && names((c as Row).pointer, target))
+    }
+    return started.get(x.id)?.pointer_type === tool && names(byId.get(String(x.from))?.pointer, target)
+  }
+  let index: Index | undefined
+  const idx = (): Index => (index ??= indexOf(seen))
+  const failed = new Set(seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip").map((r) => String(r.selection_ref)))
+  const out: Grade[] = []
+  for (const a of seen.filter((r) => r.shape === "answer" && r.role === DESCRIBED && r.seq <= asOf)) {
+    const act = a.next_act as { tool?: unknown; target?: unknown } | undefined
+    if (typeof act !== "object" || act === null || typeof act.tool !== "string" || typeof act.target !== "string") continue
+    const s = byId.get(String(a.selection_ref))
+    const root = typeof s?.root === "string" ? s.root : undefined
+    if (s === undefined || s.shape !== SELECTION || root === undefined || String(s.arm) !== TREATED || !wanted(root, a.seq)) continue
+    const window = (byRoot.get(root) ?? []).filter((x) => x.seq > a.seq).slice(0, n)
+    const kept = window.find((x) => did(x, String(act.tool), String(act.target)))
+    const decided = kept ?? (window.length === n ? window[n - 1] : undefined)
+    if (decided === undefined || decided.seq > asOf) continue
+    if (kept !== undefined && !acts.has(String(act.tool))) continue // a kept promise of a non-act earns nothing
+    const r = kept !== undefined ? 1 : 0
+    const weights = new Map<string, number>()
+    for (const [id, g] of reached(idx(), s.id, t)) {
+      const x = byId.get(id)
+      if (x === undefined || x.shape !== SELECTION || String(x.arm) !== TREATED || failed.has(id)) continue
+      weights.set(String(x.cell), Math.max(weights.get(String(x.cell)) ?? 0, g))
+    }
+    out.push({ id: a.id, ok: true, r, judged: s.id, key: `promise|${a.id}`, cells: new Set(weights.keys()), weights, by: "promise", deadline: false })
+  }
+  return out
+}
+
 // GRADES ARE COMPUTED ONCE PER (asOf, atSeq) OVER ONE ROW LIST. The posterior a walk reads, its tally, closing,
 // lapses and each outcome's standing all ask the same grades of the same rows: computed apart, each read redid the
 // whole fold. The rows are append-only, so an answer for a list holds while the list's length is unchanged; the cache
@@ -338,8 +423,9 @@ const memo = (f: (all: Row[], asOf: number, atSeq: number) => Grade[]) => {
 export const grades = memo(gradesOf)
 export const moveFailures = memo(moveFailuresOf)
 export const gapClosures = memo(gapClosuresOf)
+export const promiseGrades = memo(promiseGradesOf)
 // The same, computed fresh: what a check compares the kept answers with.
-export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf }
+export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf }
 
 type Level = "cell" | "asker" | "move" | "none"
 const move = (c: string): string => c.split("|")[0]
@@ -356,7 +442,8 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   const by = (k: Grade, w: "w_person" | "w_lapse" | "w_close"): Grade => t === undefined ? k : scale(k, t[w])
   const originated = standing(all, asOf, atSeq).flatMap((k) =>
     k.deadline && k.r === 0 ? [by(k, "w_lapse")] : k.by === PERSON ? [by(k, "w_person")] : [])
-  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close"))].map((k) => [k.key, k])).values()]
+  const promised = t?.w_check === undefined ? [] : promiseGrades(all, asOf, atSeq).map((k) => scale(k, t.w_check as number))
+  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised].map((k) => [k.key, k])).values()]
   return cells.map((c) => {
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],
@@ -377,7 +464,8 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     // grades); with no cap the whole record is inherited. An owner prior on the exact cell is the owner's word and is
     // kept as the prior instead.
     const mine = latest.filter((k) => [...k.cells].some(levels[0][1]))
-    const others = latest.filter((k) => !mine.includes(k))
+    const ownSet = new Set(mine)
+    const others = latest.filter((k) => !ownSet.has(k))
     const [coarse, inherited] = levels.slice(1)
       .map(([level, at]): [Level, Grade[]] => [level, others.filter((k) => [...k.cells].some(at))])
       .find(([, ks]) => ks.length > 0) ?? ["none" as Level, []]
