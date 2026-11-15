@@ -66,6 +66,15 @@ describe("a cell inherits its move's record (nested levels)", () => {
     expect(b.post(OLD).beta).toBe(6)
   })
 
+  test("[MUST-FAIL] the live request cell's shape: two own failures and 29 inherited read α1 β32 uncapped, α1 β7 at the seeded cap 4", () => {
+    for (const [cap, beta] of [[undefined, 32], [4, 7]] as const) {
+      const b = build(cap === undefined ? BASE : { ...BASE, prior_count: cap })
+      for (let i = 0; i < 29; i++) b.fail(OLD)
+      b.fail(NEW); b.fail(NEW)
+      expect(b.post(NEW)).toMatchObject({ alpha: 1, beta, from: "cell" })
+    }
+  })
+
   test("an owner prior on the exact cell is kept as its prior instead of the inherited record", () => {
     const b = build({ ...BASE, prior_count: 20 })
     for (let i = 0; i < 17; i++) b.fail(OLD)
