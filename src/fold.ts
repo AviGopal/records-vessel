@@ -487,6 +487,8 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     if (made === undefined || String(made.arm) !== TREATED) continue
     // As at the landing (git_land): a Right counts only on the whole diff the person was shown; a Wrong on any.
     if (r === 1 && diff!.truncated === true) continue
+    // A verdict judges the tree it names: one citing a diff of another tree judges nothing here.
+    if (String(v.tree) !== String(diff!.tree)) continue
     const weights = new Map<string, number>()
     for (const [id, g] of reached(idx(), made.id, t)) {
       const x = byId.get(id)

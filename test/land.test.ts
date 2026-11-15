@@ -88,6 +88,12 @@ describe("a person's verdict on a landing", () => {
     expect(d.posts()[2]).toMatchObject({ alpha: 1, beta: 2 })
   })
 
+  test("[MUST-FAIL] a verdict naming another tree than the diff it cites grades nothing", () => {
+    const c = chain()
+    c.verdict("person", 1, { tree: "T-other" })
+    expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
+  })
+
   test("a pool with no land_verdict is folded exactly as before (no land grades)", () => {
     const c = chain()
     expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
