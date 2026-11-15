@@ -503,7 +503,9 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       if (x === undefined || x.shape !== SELECTION || String(x.arm) !== TREATED || failed.has(id)) continue
       weights.set(String(x.cell), Math.max(weights.get(String(x.cell)) ?? 0, g))
     }
-    const key = `land|${String(v.writer)}|${String(diff!.tree ?? diff!.id)}`
+    // The USER (~16:00Z): "Latest decides": as at the landing, only the latest person mark on a tree counts, whoever made
+    // it: one standing land grade per tree (verdicts are read in seq order, so the latest replaces the earlier).
+    const key = `land|${String(diff!.tree ?? diff!.id)}`
     out.set(key, { id: v.id, ok: true, r, judged: made.id, key, cells: new Set(weights.keys()), weights, by: PERSON, deadline: false })
   }
   return [...out.values()]

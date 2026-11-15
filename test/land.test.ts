@@ -110,6 +110,19 @@ describe("a person's verdict on a landing", () => {
     expect(posts.map((p) => [p.alpha, p.beta])).toEqual([[1 + 0.25, 1], [1 + 0.5, 1], [1 + 1, 1], [1, 1]])
   })
 
+  test("[MUST-FAIL] latest decides per tree, whoever: A r 0 then B r 1 is one credit and no debit; r 1 then r 0 is one debit", () => {
+    const c = chain()
+    c.verdict("person", 0, { writer: "person-a" })
+    c.verdict("person", 1, { writer: "person-b" })
+    expect(landGrades(c.rows, 1e9, 1e9).map((g) => g.r)).toEqual([1])
+    expect(c.posts()[2]).toMatchObject({ alpha: 2, beta: 1 })
+    const d = chain()
+    d.verdict("person", 1, { writer: "person-a" })
+    d.verdict("person", 0, { writer: "person-b" })
+    expect(landGrades(d.rows, 1e9, 1e9).map((g) => g.r)).toEqual([0])
+    expect(d.posts()[2]).toMatchObject({ alpha: 1, beta: 2 })
+  })
+
   test("a pool with no land_verdict is folded exactly as before (no land grades)", () => {
     const c = chain()
     expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
