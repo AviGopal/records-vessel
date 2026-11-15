@@ -231,6 +231,9 @@ export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] =>
 //            401/403 (the caller's credentials, which rotate) and 408/429 (the callee was busy);
 //   callee:  anything else, an outage, a timeout or a transport error: not the move's fault;
 //   walk:    the walk declined to run or record it (a kind of its own: skip, too_big, unrunnable).
+// A call that never reached a producer (unserved: the shape, on the failure row, lifted by the walk from the router's
+// own answer, a resolver's refusal or a producer's failure envelope) is the callee's: nothing was asked of any producer,
+// so no producer and none of the chain is debited, whatever the status (a routed 404 included). Read from the field.
 // A refusal the walk recorded as waiting for a person (waits_for: "person" on the failure row, lifted from git_land's
 // answer: the change touches what judges changes, and only a person's verdict lands it) is the gate working, not a
 // fault in what was asked: callee. Read from the row's field only, never from its body.
@@ -238,6 +241,7 @@ const NOT_THE_REQUEST = new Set([401, 403, 408, 429])
 export const blames = (f: Record<string, unknown>): "request" | "callee" | "walk" => {
   if (f.kind !== undefined) return "walk"
   if (f.waits_for === "person") return "callee"
+  if (typeof f.unserved === "string" && f.unserved !== "") return "callee"
   const s = f.status
   return typeof s === "number" && (s === 200 || (s >= 400 && s < 500 && !NOT_THE_REQUEST.has(s))) ? "request" : "callee"
 }
