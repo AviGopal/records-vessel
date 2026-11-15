@@ -460,10 +460,12 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   if (typeof q.root === "string" && q.calls === "all") return rootCalls(q.root, q.output !== false)
   if (typeof q.call_id === "string") return oneCall(q.call_id)
   if (q.episode !== undefined && Array.isArray(q.calls)) return walkCalls(q.episode, q.calls)
+  // The walk's own reads carry each outcome's standing too: its producers decide from these rows, and an outcome shown
+  // without its standing reads as a grade that counted, even one the fold refused.
   if (q.episode !== undefined) {
-    if (q.roots !== "all") return projected(episode(q.episode))
+    if (q.roots !== "all") return projected(withStanding(episode(q.episode)))
     const all = episodes(q.episode)
-    return { shared: projected(all.shared), roots: all.roots.map((x) => ({ ...x, rows: projected(x.rows) })) }
+    return { shared: projected(withStanding(all.shared)), roots: all.roots.map((x) => ({ ...x, rows: projected(withStanding(x.rows)) })) }
   }
   return withStanding(read(q))
 }

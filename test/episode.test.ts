@@ -60,6 +60,31 @@ const fresh = async () => {
 }
 
 describe("the walk's episode", () => {
+  test("[MUST-FAIL] an outcome the walk reads carries its standing, the same as a plain read shows: a refused grade reads as refused", async () => {
+    const r = await fresh()
+    await r.arm()
+    const ask = await r.ask("make a change")
+    const sel = await r.select(ask.id)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "I will make the change", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const hop = await r.write(NODE_KEY, { shape: "hop", output: { text: "draft" }, input_refs: [ask.id] }, walk)
+    const judging = await r.select(ask.id)
+    // A grade that saw a walk hop is refused (unclean): the walk must not read it as one that counts.
+    const graded = await r.write(NODE_KEY, { shape: "outcome", r: 1, selection_ref: judging.id, event_ref: ask.id, input_refs: [ask.id, answer.id, hop.id] }, desc)
+    expect(graded.id).toBeDefined()
+    const plain = ((await r.call(NODE_KEY, { type: "record_read", ids: [graded.id] })) as Array<{ standing?: unknown }>)[0].standing
+    expect(plain).toEqual({ counted: false, why: "unclean" })
+    const one = (await r.call(NODE_KEY, { type: "record_read", episode: WALK })) as Array<{ id: string; standing?: unknown }>
+    expect(one.find((x) => x.id === graded.id)?.standing).toEqual(plain)
+    const all = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as
+      { shared: Array<{ id: string; standing?: unknown }>; roots: Array<{ rows: Array<{ id: string; standing?: unknown }> }> }
+    const rows = [...all.shared, ...all.roots.flatMap((x) => x.rows)]
+    const seen = rows.filter((x) => x.id === graded.id)
+    expect(seen.length).toBeGreaterThan(0)
+    for (const x of seen) expect(x.standing).toEqual(plain)
+    // only outcomes carry one
+    expect(rows.filter((x) => x.id !== graded.id).some((x) => x.standing !== undefined)).toBe(false)
+  })
+
   test("[MUST-FAIL] an arm older than both requests does not pin the root: the oldest open request is it", async () => {
     const r = await fresh()
     const arm = await r.arm()
