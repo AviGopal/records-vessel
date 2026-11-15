@@ -258,6 +258,16 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
     const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s
     out.set(s.id, { id: f.id, ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), weights: new Map([[String(chose.cell), 1]]), by: WALK, deadline: false })
+    // A template's run that failed is also the plan's failure: r 0 for the treated selection that wrote the template, once
+    // per failing run, every run (the USER, 11-15 ~09:00Z: "a failed run debits the writer"; and "template-run failures
+    // debit the mint cell, no positive credit from use alone"). Never a credit: a writer earns only through its runs'
+    // consequences, as any move does.
+    const a = String(s.a ?? "")
+    const t = a.startsWith("run/") ? byId.get(a.slice("run/".length)) : undefined
+    const writer = t !== undefined && t.shape === ACTIVITY_TEMPLATE ? sels.get(String(t.selection_ref)) : undefined
+    if (writer !== undefined && String(writer.arm) === TREATED) {
+      out.set(`mint|${s.id}`, { id: f.id, ok: true, r: 0, judged: writer.id, key: `mint|${s.id}`, cells: new Set([String(writer.cell)]), weights: new Map([[String(writer.cell), 1]]), by: WALK, deadline: false })
+    }
   }
   // A plan this request cannot fill (the walk's skip naming unbound placeholders, or a run stopped at one: kind unbound)
   // failed as written, not as run: r 0 for the selection that WROTE the template, once per request, template and
