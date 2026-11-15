@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -462,8 +462,43 @@ export const grades = memo(gradesOf)
 export const moveFailures = memo(moveFailuresOf)
 export const gapClosures = memo(gapClosuresOf)
 export const promiseGrades = memo(promiseGradesOf)
+
+// A person's verdict on a landing teaches the steps that produced the change (the USER, 11-15 ~12:15Z: "Yes, credit the
+// chain (Recommended)"). A person's land_verdict r 0 or 1 grades the treated selection that made the gitDiff it judges
+// (the walk's git_diff call), and travels back along consumption at w_person·γ^k, as a person's grade of an answer does:
+// so the edits and commits behind the diff are credited or debited. Only a person's: a model's land_verdict originates
+// nothing here (model grades are judged by the cross-grade rule at git_land). One standing grade per person per tree: a
+// later verdict of theirs on the same tree replaces the earlier.
+const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const t = travelOf(seen)
+  if (t === undefined) return [] // no owner credits row: nothing travels, so nothing is credited
+  const byId = new Map(seen.map((r) => [r.id, r]))
+  const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const failed = new Set(seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip").map((r) => String(r.selection_ref)))
+  let index: Index | undefined
+  const idx = (): Index => (index ??= indexOf(seen))
+  const out = new Map<string, Grade>()
+  for (const v of seen.filter((r) => r.shape === LAND_VERDICT && r.role === PERSON && r.seq <= asOf).sort((a, b) => a.seq - b.seq)) {
+    const r = Number(v.r)
+    if (!(r === 0 || r === 1)) continue
+    const diff = [v.input_refs].flat().map((id) => byId.get(String(id))).find((x) => x !== undefined && x.shape === GIT_DIFF && x.role === WALK)
+    const made = diff === undefined ? undefined : sels.get(String(diff.selection_ref))
+    if (made === undefined || String(made.arm) !== TREATED) continue
+    const weights = new Map<string, number>()
+    for (const [id, g] of reached(idx(), made.id, t)) {
+      const x = byId.get(id)
+      if (x === undefined || x.shape !== SELECTION || String(x.arm) !== TREATED || failed.has(id)) continue
+      weights.set(String(x.cell), Math.max(weights.get(String(x.cell)) ?? 0, g))
+    }
+    const key = `land|${String(v.writer)}|${String(diff!.tree ?? diff!.id)}`
+    out.set(key, { id: v.id, ok: true, r, judged: made.id, key, cells: new Set(weights.keys()), weights, by: PERSON, deadline: false })
+  }
+  return [...out.values()]
+}
+export const landGrades = memo(landGradesOf)
 // The same, computed fresh: what a check compares the kept answers with.
-export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf }
+export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf, landGrades: landGradesOf }
 
 type Level = "cell" | "asker" | "move" | "none"
 const move = (c: string): string => c.split("|")[0]
@@ -481,7 +516,8 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   const originated = standing(all, asOf, atSeq).flatMap((k) =>
     k.deadline && k.r === 0 ? [by(k, "w_lapse")] : k.by === PERSON ? [by(k, "w_person")] : [])
   const promised = t?.w_check === undefined ? [] : promiseGrades(all, asOf, atSeq).map((k) => scale(k, t.w_check as number))
-  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised].map((k) => [k.key, k])).values()]
+  const landed = landGrades(all, asOf, atSeq).map((k) => by(k, "w_person"))
+  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed].map((k) => [k.key, k])).values()]
   return cells.map((c) => {
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],
