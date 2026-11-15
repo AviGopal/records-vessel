@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK , INFRA_WINDOW } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -256,8 +256,26 @@ const blamed = (f: Row): string => typeof f.blames === "string" ? f.blames
 // the move itself. Either way: treated, by the walk that wrote the failure; once per failing selection; never a chain,
 // since nothing was produced. Kept apart from grades(): what closes a request and what lapses never read it, and its key
 // cannot replace a grade's.
+// The owner's marks that a span of the store was an outage (the USER, 11-15: "Owner row marks window"): each infra_window
+// row names a span (from_seq, to_seq) and the failure statuses it covers; a walk failure inside a span, of a status it
+// names, debits no one. Only the classes named: a refusal of another status in the same span still counts. The latest
+// row per window_id decides (a later row with retracted: true withdraws it). Rows that do not say all three are ignored.
+type InfraWindow = { from: number; to: number; statuses: Set<number> }
+const infraWindowsOf = (seen: Row[]): InfraWindow[] => {
+  const latest = new Map<string, Row>()
+  for (const r of seen.filter((x) => x.shape === INFRA_WINDOW && x.role === OWNER).sort((a, b) => a.seq - b.seq)) latest.set(String(r.window_id ?? r.id), r)
+  return [...latest.values()].filter((r) => r.retracted !== true).flatMap((r) => {
+    const from = Number(r.from_seq), to = Number(r.to_seq)
+    const statuses = [r.statuses].flat().filter((x): x is number => typeof x === "number" && Number.isInteger(x))
+    return Number.isFinite(from) && Number.isFinite(to) && from <= to && statuses.length > 0 ? [{ from, to, statuses: new Set(statuses) }] : []
+  })
+}
+const inInfraWindow = (f: Row, windows: InfraWindow[]): boolean =>
+  windows.some((w) => f.seq >= w.from && f.seq <= w.to && w.statuses.has(Number(f.status)))
+
 const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
+  const windows = infraWindowsOf(seen)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const byId = new Map(seen.map((r) => [r.id, r]))
   const out = new Map<string, Grade>()
@@ -265,6 +283,7 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const s = sels.get(String(f.selection_ref))
     if (s === undefined || String(s.arm) !== TREATED || s.writer !== f.writer) continue
     if (blamed(f) !== "request") continue
+    if (inInfraWindow(f, windows)) continue
     const asked = s.from === undefined ? undefined : byId.get(String(s.from))
     const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
     const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s

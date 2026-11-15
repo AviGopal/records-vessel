@@ -34,6 +34,8 @@ export const RHYTHM = "rhythm"
 // The owner's thresholds for a detector that files classes of failure as gaps (how many, over how many roots, within
 // how many rows, quiet for how many rows to close, and whether it writes at all): configuration a detector reads.
 export const FAILURE_RULE = "failure_rule"
+// The owner's mark that a span of the store was an outage: failures of the classes it names, inside it, debit no one.
+export const INFRA_WINDOW = "infra_window"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.
