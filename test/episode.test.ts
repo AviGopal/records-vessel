@@ -200,6 +200,17 @@ describe("the walk's episode", () => {
     }
   })
 
+  test("[MUST-FAIL] only the owner writes a failure_rule row: a walk, described, detector or person write is refused", async () => {
+    const r = await fresh()
+    await r.arm()
+    const detector = { writer: "walk-failure-detector", role: "detector" }
+    for (const [key, as] of [[NODE_KEY, walk], [NODE_KEY, desc], [NODE_KEY, detector], [PERSON_KEY, undefined]] as const) {
+      const w = await r.write(key, { shape: "failure_rule", target: "walk_failure", min_count: 1, write: true }, as)
+      expect([as?.role ?? "person", w?.failure?.status]).toEqual([as?.role ?? "person", 403])
+    }
+    expect((await r.write(NODE_KEY, { shape: "failure_rule", target: "walk_failure", min_count: 5 }, owner)).role).toBe("owner")
+  })
+
   test("[MUST-FAIL] only the owner writes a repository row: a walk, described or person write is refused, so none is shared", async () => {
     const r = await fresh()
     await r.arm()

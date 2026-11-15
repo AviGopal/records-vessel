@@ -31,6 +31,9 @@ export const CREDITS = "credits"
 export const REPOSITORY = "repository"
 // The owner's schedule for a template the walk runs when due (the USER: "Build the schedule reader first").
 export const RHYTHM = "rhythm"
+// The owner's thresholds for a detector that files classes of failure as gaps (how many, over how many roots, within
+// how many rows, quiet for how many rows to close, and whether it writes at all): configuration a detector reads.
+export const FAILURE_RULE = "failure_rule"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.
