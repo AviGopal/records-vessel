@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { blames, grades, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -26,7 +26,7 @@ export type Query = {
   has?: string
 }
 
-const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY])
+const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM])
 // Whose rows are asks and what the walk answers (the roots, what wakes a wait, whose deadlines lapse): a person's, the
 // owner's, and an operator's. Only a person's are verdicts (closed, earned, below).
 const EXO_ROLES = new Set([PERSON, OWNER, OPERATOR])
@@ -113,8 +113,10 @@ export const read = (q: Query): Row[] => {
   return out
 }
 
+// A template is configuration whoever wrote it (the owner seeds a rhythm's; the walk's plan writers write their own), never
+// an ask.
 const exogenous = (from: Row[]): Row[] =>
-  from.filter((r) => EXO_ROLES.has(r.role)).filter((r) => !OWNER_SHAPES.has(r.shape))
+  from.filter((r) => EXO_ROLES.has(r.role)).filter((r) => !OWNER_SHAPES.has(r.shape) && r.shape !== ACTIVITY_TEMPLATE)
 
 // A request is closed when a grade that stands says how it ended (fold.ts standing, the fold's own predicate: of a
 // writer's grades of one answer only the latest stands): DONE by a
@@ -261,14 +263,23 @@ const earned = (w: string): (t: Row) => boolean => {
   }
 }
 
-// What every root's work shares: the owner's channels, schemas, call preconditions and repositories, and the templates
-// the walk earned.
+// What every root's work shares: the owner's channels, schemas, call preconditions, repositories and rhythms, the templates
+// the walk earned, and the templates a standing rhythm names (the walk runs those only when their rhythm is due).
 const shared = (w: string): Row[] => {
   const allSels = new Set(rows.filter((r) => r.shape === SELECTION).filter((r) => r.writer === w).map((r) => r.id))
   const ok = earned(w)
+  const scheduled = rhythmTemplates()
   return rows.filter((r) =>
-    (r.role === OWNER && (r.shape === CHANNEL || r.shape === SHAPE_SCHEMA || r.shape === REQUIRES || r.shape === REPOSITORY)) ||
+    (r.role === OWNER && (r.shape === CHANNEL || r.shape === SHAPE_SCHEMA || r.shape === REQUIRES || r.shape === REPOSITORY || r.shape === RHYTHM)) ||
+    (r.shape === ACTIVITY_TEMPLATE && (r.role === DESCRIBED || r.role === OWNER) && scheduled.has(r.id)) ||
     (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) && ok(r)))
+}
+
+// The templates the owner's standing rhythms name: the latest rhythm row per template, unless it says retired.
+const rhythmTemplates = (): Set<string> => {
+  const latest = new Map<string, Row>()
+  for (const r of rows.filter((x) => x.shape === RHYTHM && x.role === OWNER).sort((a, b) => a.seq - b.seq)) latest.set(String(r.template), r)
+  return new Set([...latest.values()].filter((r) => r.retired !== true).map((r) => String(r.template)))
 }
 
 export const episode = (w: string): Row[] => {

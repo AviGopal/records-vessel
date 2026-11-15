@@ -174,6 +174,32 @@ describe("the walk's episode", () => {
     expect(ep).toContain(first.id)
   })
 
+  test("[MUST-FAIL] a rhythm's template is shared though no run earned it; the rhythm row is shared; a retired rhythm's template is not", async () => {
+    const r = await fresh()
+    await r.arm()
+    const first = await r.ask("first")
+    const tpl = await r.write(NODE_KEY, { shape: "activity_template", sig: { in: [], out: ["gap"] }, calls: [{ shape: "walk_failure_detect", pointer: {} }] }, owner)
+    const unnamed = await r.write(NODE_KEY, { shape: "activity_template", sig: { in: [], out: ["gap"] }, calls: [{ shape: "other_tool", pointer: {} }] }, owner)
+    const rhythm = await r.write(NODE_KEY, { shape: "rhythm", template: tpl.id, every_rows: 500 }, owner)
+    let shared = (await r.episodes()).shared.map((x: any) => x.id)
+    expect(shared).toContain(rhythm.id)
+    expect(shared).toContain(tpl.id)
+    expect(shared).not.toContain(unnamed.id) // no rhythm names it, and no run earned it
+    await r.write(NODE_KEY, { shape: "rhythm", template: tpl.id, every_rows: 500, retired: true }, owner)
+    shared = (await r.episodes()).shared.map((x: any) => x.id)
+    expect(shared).not.toContain(tpl.id)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([first.id]) // configuration, never a root
+  })
+
+  test("[MUST-FAIL] only the owner writes a rhythm row: a walk, described or person write is refused", async () => {
+    const r = await fresh()
+    await r.arm()
+    for (const [key, as] of [[NODE_KEY, walk], [NODE_KEY, desc], [PERSON_KEY, undefined]] as const) {
+      const w = await r.write(key, { shape: "rhythm", template: "t", every_rows: 1 }, as)
+      expect([as?.role ?? "person", w?.failure?.status]).toEqual([as?.role ?? "person", 403])
+    }
+  })
+
   test("[MUST-FAIL] only the owner writes a repository row: a walk, described or person write is refused, so none is shared", async () => {
     const r = await fresh()
     await r.arm()
