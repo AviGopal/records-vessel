@@ -79,7 +79,9 @@ export const indexOf = (seen: Row[]): Index => {
   return { byId, sels, made, inputs }
 }
 
-export const reached = (index: Index, start: string, t: Travel): Map<string, number> => {
+// A walk back may stop at a row it must not pass through (stopAt): the selection that produced that row is neither
+// credited nor walked past.
+export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: Row) => boolean): Map<string, number> => {
   const { byId, sels, made, inputs } = index
   const consumed = (sel: Row): string[] => {
     const a = String(sel.a ?? "")
@@ -103,6 +105,7 @@ export const reached = (index: Index, start: string, t: Travel): Map<string, num
       const sel = sels.get(id)
       if (sel === undefined) continue
       for (const x of consumed(sel)) {
+        if (stopAt !== undefined && byId.get(x) !== undefined && stopAt(byId.get(x)!)) continue
         const p = byId.get(x)?.selection_ref
         if (typeof p === "string" && sels.has(p) && !seenSel.has(p) && (sels.get(p)?.seq ?? Infinity) < sel.seq) { seenSel.add(p); next.push(p) }
       }
@@ -469,6 +472,8 @@ export const promiseGrades = memo(promiseGradesOf)
 // so the edits and commits behind the diff are credited or debited. Only a person's: a model's land_verdict originates
 // nothing here (model grades are judged by the cross-grade rule at git_land). One standing grade per person per tree: a
 // later verdict of theirs on the same tree replaces the earlier.
+// The shapes this fold takes grades from: a model's or a person's judgment of a step, not a step that made anything.
+const GRADE_SHAPES = new Set([OUTCOME, LAND_VERDICT])
 const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const t = travelOf(seen)
@@ -490,7 +495,10 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     // A verdict judges the tree it names: one citing a diff of another tree judges nothing here.
     if (String(v.tree) !== String(diff!.tree)) continue
     const weights = new Map<string, number>()
-    for (const [id, g] of reached(idx(), made.id, t)) {
+    // The USER (~16:00Z): "Stop at makers": a landing teaches the steps that made the change, never the graders whose
+    // grades a maker read. A grade row (a shape this fold takes grades from) is not walked through: its producer is
+    // judged by later person marks on what it graded.
+    for (const [id, g] of reached(idx(), made.id, t, (row) => GRADE_SHAPES.has(String(row.shape)))) {
       const x = byId.get(id)
       if (x === undefined || x.shape !== SELECTION || String(x.arm) !== TREATED || failed.has(id)) continue
       weights.set(String(x.cell), Math.max(weights.get(String(x.cell)) ?? 0, g))

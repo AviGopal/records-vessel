@@ -94,6 +94,22 @@ describe("a person's verdict on a landing", () => {
     expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
   })
 
+  test("[MUST-FAIL] stop at makers: a grader whose outcome the maker read is neither credited nor walked past", () => {
+    const c = chain()
+    // a grader selection, made before the request that read its outcome
+    const graderSel = { shape: "selection", role: "walk", writer: "walk", id: "sel-grader", seq: 0.5, t: "", input_refs: [], arm: "treated", cell: "produce/outcome|answer", a: "produce/outcome/ch1" } as Row
+    const graded = { shape: "outcome", role: "described", writer: "described", id: "outcome-graded", seq: 0.6, t: "", r: 0, selection_ref: graderSel.id, input_refs: [] } as Row
+    c.rows.push(graderSel, graded)
+    const diffReq = c.rows.find((x) => x.shape === "request" && (x.pointer as { type?: string }).type === "git_diff")!
+    diffReq.input_refs = [...[diffReq.input_refs].flat(), graded.id]
+    diffReq.uses = [...[diffReq.uses].flat(), graded.id]
+    c.verdict("person", 1)
+    const cells = [...CELLS, "produce/outcome|answer"]
+    const posts = fold(c.rows, cells, 1e9, 1e9)
+    // the makers move as before; the grader's cell does not
+    expect(posts.map((p) => [p.alpha, p.beta])).toEqual([[1 + 0.25, 1], [1 + 0.5, 1], [1 + 1, 1], [1, 1]])
+  })
+
   test("a pool with no land_verdict is folded exactly as before (no land grades)", () => {
     const c = chain()
     expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
