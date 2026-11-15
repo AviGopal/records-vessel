@@ -48,10 +48,13 @@ describe("an unfillable plan debits its writer", () => {
     expect(b.post().beta).toBe(4)
   })
 
-  test("[MUST-FAIL] a run stopped at an unfilled placeholder (kind unbound) counts the same way", () => {
+  test("[MUST-FAIL] a run stopped at an unfilled placeholder (kind unbound) counts the same way, against the writer only", () => {
     const b = build()
-    b.said("w1", { kind: "unbound", unbound: ["calls.0.output.cwd"] })
+    const RUN = "run/t|gitWorktree,asker:person,age:0"
+    const s = b.add(row("selection", "walk", { arm: "treated", cell: RUN, a: `run/${b.t.id}`, root: "w1" }))
+    b.add(row("failure", "walk", { selection_ref: s.id, template_ref: b.t.id, kind: "unbound", unbound: ["calls.0.output.cwd"] }))
     expect(b.post().beta).toBe(2)
+    expect(foldFrom(b.rows, [RUN], 1e9, 1e9)[0]).toMatchObject({ alpha: 1, beta: 1 }) // the run's own cell is untouched
   })
 
   test("a skip for another reason (a shape nothing serves) debits no one, as before", () => {
