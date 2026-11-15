@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -258,6 +258,21 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
     const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s
     out.set(s.id, { id: f.id, ok: true, r: 0, judged: chose.id, key: `fail|${s.id}`, cells: new Set([String(chose.cell)]), weights: new Map([[String(chose.cell), 1]]), by: WALK, deadline: false })
+  }
+  // A plan this request cannot fill (the walk's skip naming unbound placeholders, or a run stopped at one: kind unbound)
+  // failed as written, not as run: r 0 for the selection that WROTE the template, once per request, template and
+  // placeholder (the USER, 11-15 ~08:10Z: "Debit the writer once (Recommended)"). The same unfilled placeholder seen again
+  // in the same request is not counted again; a template no treated walk selection wrote debits no one.
+  for (const f of seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.seq <= asOf && (r.kind === "skip" || r.kind === "unbound"))) {
+    const holes = [f.unbound].flat().filter((x): x is string => typeof x === "string" && x !== "")
+    const s = sels.get(String(f.selection_ref))
+    const t = byId.get(String(f.template_ref))
+    const wrote = t === undefined || t.shape !== ACTIVITY_TEMPLATE ? undefined : sels.get(String(t.selection_ref))
+    if (s === undefined || s.writer !== f.writer || wrote === undefined || String(wrote.arm) !== TREATED) continue
+    for (const h of holes) {
+      const key = `unbound|${String(s.root ?? s.id)}|${t!.id}|${h}`
+      if (!out.has(key)) out.set(key, { id: f.id, ok: true, r: 0, judged: wrote.id, key, cells: new Set([String(wrote.cell)]), weights: new Map([[String(wrote.cell), 1]]), by: WALK, deadline: false })
+    }
   }
   return [...out.values()]
 }
