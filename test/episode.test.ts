@@ -499,6 +499,14 @@ describe("the walk's episode", () => {
     expect(arm.id).toBeDefined()
   })
 
+  test("[MUST-FAIL] record_read head: true answers the store's latest seq alone, and it moves with every write", async () => {
+    const r = await fresh()
+    const a = await gap(r, "g-h1", "open")
+    expect(await r.call(NODE_KEY, { type: "record_read", head: true })).toEqual({ at_seq: a.seq })
+    const b = await gap(r, "g-h2", "open")
+    expect(await r.call(NODE_KEY, { type: "record_read", head: true })).toEqual({ at_seq: b.seq })
+  })
+
   test("[MUST-FAIL] a gap its detector marks walkable false is shown, not worked: not a root, until a later row says otherwise", async () => {
     const r = await fresh()
     await r.arm()

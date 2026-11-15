@@ -22,6 +22,7 @@ export type Query = {
   root?: string
   call_id?: string
   output?: boolean
+  head?: boolean
   // Only rows that hold this field (any value): after latest_by, so a thing whose latest row dropped the field shows nothing.
   has?: string
 }
@@ -471,7 +472,10 @@ const withStanding = (out: Row[]): Row[] => {
   })
 }
 
-export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> => {
+export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> | { at_seq: number } => {
+  // The store's latest seq alone (head: true): what a reader counting "rows written since" counts against, without
+  // reading any rows or folding grades.
+  if (q.head === true) return { at_seq: lastSeq() }
   if (typeof q.root === "string" && q.calls === "all") return rootCalls(q.root, q.output !== false)
   if (typeof q.call_id === "string") return oneCall(q.call_id)
   if (q.episode !== undefined && Array.isArray(q.calls)) return walkCalls(q.episode, q.calls)
