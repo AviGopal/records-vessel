@@ -111,8 +111,21 @@ describe("a promise, settled by the walk's next selections", () => {
     const tmpl = b.add(row("activity_template", "described", { calls: [{ shape: "fs_read", pointer: { path: "src/limits.ts" } },
       { shape: "fs_edit", pointer: { path: "/walk-trees/hsv-x/src/limits.ts", old_string: "8", new_string: "10" } }] }))
     const sel = b.add(row("selection", "walk", { arm: "treated", cell: "run/t|world_changed,asker:person,age:0", root: b.ask.id, a: `run/${tmpl.id}` }))
-    b.add(row("hop", "walk", { selection_ref: sel.id, call_id: "cr", phase: "started", kind: "run", pointer_type: "fs_read" }))
+    // the run's inner calls each start under the run's selection: the read, then the edit
+    b.add(row("hop", "walk", { selection_ref: sel.id, call_id: "cr1", phase: "started", kind: "run", pointer_type: "fs_read" }))
+    b.add(row("hop", "walk", { selection_ref: sel.id, call_id: "cr2", phase: "started", kind: "run", pointer_type: "fs_edit" }))
     expect(promiseGrades(b.rows, 1e9, 1e9).map((g) => g.r)).toEqual([1])
+  })
+
+  test("[MUST-FAIL] a run of a template that declares the act but stops before that call starts does not keep it", () => {
+    const b = build()
+    const tmpl = b.add(row("activity_template", "described", { calls: [{ shape: "git_diff", pointer: { cwd: "{{ sig.in[0].cwd }}" } },
+      { shape: "fs_edit", pointer: { path: "src/limits.ts", old_string: "8", new_string: "10" } }] }))
+    const sel = b.add(row("selection", "walk", { arm: "treated", cell: "run/t|world_changed,asker:person,age:0", root: b.ask.id, a: `run/${tmpl.id}` }))
+    b.add(row("hop", "walk", { selection_ref: sel.id, call_id: "cu", phase: "started", kind: "run", pointer_type: "git_diff" }))
+    b.add(row("failure", "walk", { selection_ref: sel.id, status: 422, blames: "request", body: "no such directory" }))
+    b.other(); b.other()
+    expect(promiseGrades(b.rows, 1e9, 1e9).map((g) => g.r)).toEqual([0]) // the window passed with no edit started: broken
   })
 
   test("[MUST-FAIL] with no promise weight and window on the owner's credits row, nothing is settled (no default)", () => {

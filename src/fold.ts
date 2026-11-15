@@ -357,21 +357,30 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // Which tools are acts: the ones the owner's requires rows gate on a wanted change (the owner's word, read here, not
   // a list in records). Keeping a promise of anything else earns nothing; breaking one is still broken.
   const acts = new Set(seen.filter((r) => r.shape === "requires" && r.role === OWNER && r.needs === "change_wanted" && r.retired !== true).map((r) => String(r.for)))
-  const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started").map((r) => [String(r.selection_ref), r]))
+  // Each selection's started calls, by the tool called (a run's inner calls each write their own started hop under the
+  // run's selection, so a run can have several).
+  const started = new Map<string, Set<string>>()
+  for (const h of seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started")) {
+    const k = String(h.selection_ref)
+    if (!started.has(k)) started.set(k, new Set())
+    started.get(k)!.add(String(h.pointer_type))
+  }
   // The target matches loosely, on purpose: any string field of the call's pointer equal to it, or a path ending in
   // /target (the clone's absolute path ends in the repository's relative one).
   const names = (pointer: unknown, target: string): boolean => typeof pointer === "object" && pointer !== null
     && Object.values(pointer as Record<string, unknown>).some((v) => typeof v === "string" && (v === target || v.endsWith(`/${target}`)))
-  // Whether a selection did the promised act: a call (its started hop names the tool, its request's pointer the target),
-  // or a run of a template one of whose calls is that tool on that target.
+  // Whether a selection did the promised act: a call of that tool actually started under it (the walk's started hop),
+  // with the target named by the call's pointer: a call's request pointer, or, for a run (which has no request), its
+  // template's declared call of that tool. A run whose template declares the act but which stopped before that call
+  // started did not do it.
   const did = (x: Row, tool: string, target: string): boolean => {
-    if (started.get(x.id) === undefined) return false
+    if (!started.get(x.id)?.has(tool)) return false
     const a = String(x.a ?? "")
     if (a.startsWith("run/")) {
       const calls = byId.get(a.slice("run/".length))?.calls
       return Array.isArray(calls) && calls.some((c) => typeof c === "object" && c !== null && (c as Row).shape === tool && names((c as Row).pointer, target))
     }
-    return started.get(x.id)?.pointer_type === tool && names(byId.get(String(x.from))?.pointer, target)
+    return names(byId.get(String(x.from))?.pointer, target)
   }
   let index: Index | undefined
   const idx = (): Index => (index ??= indexOf(seen))
