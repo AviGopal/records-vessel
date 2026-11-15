@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { appendFileSync } from "node:fs"
+import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { DATA_DIR } from "./config"
 import { blames, grades, standing } from "./fold"
@@ -34,6 +34,9 @@ const EXO_ROLES = new Set([PERSON, OWNER, OPERATOR])
 const MINE = new Set([SELECTION, HOP, FAILURE])
 const FILE = join(DATA_DIR, "rows")
 
+// A fresh volume has no data directory: make it (and its parents) before the file, or the first boot exits ENOENT on
+// every start and crash-loops (install acceptance: records never served on a new install).
+mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
 appendFileSync(FILE, "")
 export const rows: Row[] = (await Bun.file(FILE).text())
   .split("\n")
