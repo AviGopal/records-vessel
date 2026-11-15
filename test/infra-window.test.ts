@@ -46,6 +46,14 @@ describe("an owner-marked infra window", () => {
     expect(b.beta()).toBe(2)
   })
 
+  test("[MUST-FAIL] a window covers only what was written before it: a span reaching past its own row excuses nothing after it (qa)", () => {
+    const b = build()
+    const before = b.callFails(404)
+    b.mark("owner", { window_id: "w-1", from_seq: before, to_seq: 1e18, statuses: [404] })
+    b.callFails(404) // written after the window row
+    expect(b.beta()).toBe(2) // the earlier one excused, the later one counts
+  })
+
   test("a retracted window, a row missing a field, and a row not the owner's change nothing", () => {
     const b = build()
     const a = b.callFails(404)

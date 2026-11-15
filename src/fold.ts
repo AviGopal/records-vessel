@@ -258,14 +258,16 @@ const blamed = (f: Row): string => typeof f.blames === "string" ? f.blames
 // cannot replace a grade's.
 // The owner's marks that a span of the store was an outage (the USER, 11-15: "Owner row marks window"): each infra_window
 // row names a span (from_seq, to_seq) and the failure statuses it covers; a walk failure inside a span, of a status it
-// names, debits no one. Only the classes named: a refusal of another status in the same span still counts. The latest
-// row per window_id decides (a later row with retracted: true withdraws it). Rows that do not say all three are ignored.
+// names, debits no one. Only the classes named: a refusal of another status in the same span still counts. A window
+// covers only rows written before it (its span ends at its own seq at the latest), so no row excuses failures yet to
+// come (qa: a standing exemption would be a fiat that never ends). The latest row per window_id decides (a later row
+// with retracted: true withdraws it). Rows that do not say all three are ignored.
 type InfraWindow = { from: number; to: number; statuses: Set<number> }
 const infraWindowsOf = (seen: Row[]): InfraWindow[] => {
   const latest = new Map<string, Row>()
   for (const r of seen.filter((x) => x.shape === INFRA_WINDOW && x.role === OWNER).sort((a, b) => a.seq - b.seq)) latest.set(String(r.window_id ?? r.id), r)
   return [...latest.values()].filter((r) => r.retracted !== true).flatMap((r) => {
-    const from = Number(r.from_seq), to = Number(r.to_seq)
+    const from = Number(r.from_seq), to = Math.min(Number(r.to_seq), r.seq)
     const statuses = [r.statuses].flat().filter((x): x is number => typeof x === "number" && Number.isInteger(x))
     return Number.isFinite(from) && Number.isFinite(to) && from <= to && statuses.length > 0 ? [{ from, to, statuses: new Set(statuses) }] : []
   })
