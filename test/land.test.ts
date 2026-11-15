@@ -24,11 +24,12 @@ const chain = () => {
   const diffReq = add(row("request", "described", { selection_ref: reqSel.id, input_refs: [ask.id, edited.id], uses: [edited.id], pointer: { type: "git_diff" } }))
   const diffSel = add(row("selection", "walk", { arm: "treated", cell: CELLS[2], a: "call/git_diff", from: diffReq.id, root: ask.id }))
   const diff = add(row("gitDiff", "walk", { selection_ref: diffSel.id, call_id: "cd", tree: "T1", input_refs: [ask.id] }))
+  const cut = () => { diff.truncated = true }
   const failEdit = () => add(row("failure", "walk", { selection_ref: editSel.id, call_id: "ce", status: 422 }))
   const asControl = () => { diffSel.arm = "control" }
   const verdict = (role: string, r: number, extra: Record<string, unknown> = {}) => add(row("land_verdict", role, { r, tree: "T1", input_refs: [ask.id, diff.id], ...extra }))
   const posts = () => fold(rows, CELLS, 1e9, 1e9)
-  return { rows, verdict, posts, failEdit, asControl }
+  return { rows, verdict, posts, failEdit, asControl, cut }
 }
 
 describe("a person's verdict on a landing", () => {
@@ -74,6 +75,17 @@ describe("a person's verdict on a landing", () => {
     c.asControl()
     c.verdict("person", 1)
     expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
+  })
+
+  test("[MUST-FAIL] a person's r 1 on a cut diff credits nothing; an r 0 on it still debits (as the landing reads them)", () => {
+    const c = chain()
+    c.cut()
+    c.verdict("person", 1)
+    expect(landGrades(c.rows, 1e9, 1e9)).toEqual([])
+    const d = chain()
+    d.cut()
+    d.verdict("person", 0)
+    expect(d.posts()[2]).toMatchObject({ alpha: 1, beta: 2 })
   })
 
   test("a pool with no land_verdict is folded exactly as before (no land grades)", () => {
