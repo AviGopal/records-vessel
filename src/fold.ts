@@ -19,8 +19,9 @@ export type Grade = { id: string; ok: boolean; r: number; judged: string; key: s
 // source of these (design: enablement-credit section 1). With no row, or a row with any field missing or out of range
 // (the row is then unusable whole, not patched field by field), nothing travels: a grade credits only the selection
 // that made the row it judged, counted once, unscaled. Either is said on records' output, once per change.
-export type Travel = { w_person: number; w_lapse: number; w_close: number; gamma: number; depth: number }
-const BOUNDS: Record<keyof Travel, [number, number]> = { w_person: [0, 10], w_lapse: [0, 10], w_close: [0, 10], gamma: [0, 1], depth: [0, 64] }
+export type Travel = { w_person: number; w_lapse: number; w_close: number; gamma: number; depth: number; prior_count?: number }
+type Required = "w_person" | "w_lapse" | "w_close" | "gamma" | "depth"
+const BOUNDS: Record<Required, [number, number]> = { w_person: [0, 10], w_lapse: [0, 10], w_close: [0, 10], gamma: [0, 1], depth: [0, 64] }
 let said = ""
 const say = (line: string): void => {
   if (line !== said) console.log(`[records] ${line}`)
@@ -29,14 +30,19 @@ const say = (line: string): void => {
 const travelOf = (seen: Row[]): Travel | undefined => {
   const row = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === SELECTION).sort((a, b) => a.seq - b.seq).at(-1)
   if (row === undefined) { say("credits selection row absent: depth 0 only"); return undefined }
-  const bad = (Object.keys(BOUNDS) as Array<keyof Travel>).find((k) => {
+  const bad = (Object.keys(BOUNDS) as Required[]).find((k) => {
     const v = row[k]
     return typeof v !== "number" || !Number.isFinite(v) || v < BOUNDS[k][0] || v > BOUNDS[k][1] || (k === "depth" && !Number.isInteger(v))
   })
   const id = String(row.id).replace(/[^A-Za-z0-9_.:-]/g, "?").slice(0, 64)
   if (bad !== undefined) { say(`credits selection row ${id} ignored: ${bad} missing or out of range; depth 0 only`); return undefined }
-  say(`credits selection row ${id} used`)
-  return { w_person: Number(row.w_person), w_lapse: Number(row.w_lapse), w_close: Number(row.w_close), gamma: Number(row.gamma), depth: Number(row.depth) }
+  // A cap on how much of a coarser level's record a cell inherits (prior_count): optional; with none the whole record
+  // is inherited (the USER: inherit, then refine), never a value assumed in its place.
+  const pc = row.prior_count
+  const nested = typeof pc === "number" && Number.isFinite(pc) && pc > 0 && pc <= 1000
+  say(`credits selection row ${id} used${nested ? `; inheritance capped at ${Number(pc)}` : ""}`)
+  return { w_person: Number(row.w_person), w_lapse: Number(row.w_lapse), w_close: Number(row.w_close), gamma: Number(row.gamma), depth: Number(row.depth),
+    ...(nested ? { prior_count: Number(pc) } : {}) }
 }
 
 const shapeOf = (e: unknown): string => typeof e === "object" && e !== null ? String((e as { shape?: unknown }).shape) : String(e)
@@ -357,17 +363,30 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
       ["asker", (x) => move(x) === move(c) && asker(c) !== undefined && asker(x) === asker(c)],
       ["move", (x) => move(x) === move(c)],
     ]
-    const [from, counted] = levels
-      .map(([level, at]): [Level, Grade[]] => [level, latest.filter((k) => [...k.cells].some(at))])
-      .find(([, ks]) => ks.length > 0) ?? ["none", []]
-    const p0 = priors
-      .filter((r) => String(r.cell) === c)
-      .reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
-    // Each grade's weight at this level: its largest weight on a cell this level matches.
-    const w = (k: Grade): number => Math.max(0, ...[...k.weights].filter(([x]) => levels.find(([l]) => l === from)![1](x)).map(([, g]) => g))
-    const wins = counted.reduce((s, k) => s + k.r * w(k), 0)
-    const losses = counted.reduce((s, k) => s + (1 - k.r) * w(k), 0)
-    return { cell: c, alpha: p0.alpha + wins, beta: p0.beta + losses, from }
+    const own = priors.filter((r) => String(r.cell) === c)
+    const p0 = own.reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
+    // Each grade's weight at a level: its largest weight on a cell that level matches.
+    const w = (k: Grade, level: Level): number => Math.max(0, ...[...k.weights].filter(([x]) => levels.find(([l]) => l === level)![1](x)).map(([, g]) => g))
+    const sum = (ks: Grade[], level: Level) => ({
+      wins: ks.reduce((s, k) => s + k.r * w(k, level), 0), losses: ks.reduce((s, k) => s + (1 - k.r) * w(k, level), 0) })
+    // INHERIT, THEN REFINE (the USER, 11-15). The levels nest: a cell starts from the record of the finest coarser level
+    // that has one, counted without the grades that reach this cell itself (they are added once, as its own), and its
+    // own grades add on top. So a new cell's first grade adds to what it inherited instead of replacing it: a move that
+    // failed seventeen times in a coarser context does not draw as new after one more ("never forgets"). The owner may
+    // cap how much is inherited (prior_count on the credits row: the inherited record then weighs at most that many
+    // grades); with no cap the whole record is inherited. An owner prior on the exact cell is the owner's word and is
+    // kept as the prior instead.
+    const mine = latest.filter((k) => [...k.cells].some(levels[0][1]))
+    const others = latest.filter((k) => !mine.includes(k))
+    const [coarse, inherited] = levels.slice(1)
+      .map(([level, at]): [Level, Grade[]] => [level, others.filter((k) => [...k.cells].some(at))])
+      .find(([, ks]) => ks.length > 0) ?? ["none" as Level, []]
+    const got = sum(inherited, coarse)
+    const cap = t?.prior_count
+    const scale = cap === undefined ? 1 : Math.min(1, cap / Math.max(got.wins + got.losses, 1e-9))
+    const base = own.length > 0 ? p0 : { alpha: p0.alpha + got.wins * scale, beta: p0.beta + got.losses * scale }
+    const self = sum(mine, "cell")
+    return { cell: c, alpha: base.alpha + self.wins, beta: base.beta + self.losses, from: mine.length > 0 ? "cell" : coarse }
   })
 }
 
