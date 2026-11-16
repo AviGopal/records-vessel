@@ -555,6 +555,23 @@ describe("the walk's episode", () => {
     expect((await r2.episodes()).roots.map((x) => x.root.id)).toEqual([arm2.id])
   })
 
+  test("[MUST-FAIL] the fact replaces the hold, never what the row says: a field the row has keeps the row's value (qa k3)", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, { ...READ_AS_FACT, fact: { localized: false, status: "from-the-fact", summary: "from-the-fact" } }, owner)
+    const old = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", summary: "the gap's own", meta: GEN_HOLD }, detector)
+    const shown = (await r.episodes()).roots.flatMap((x) => x.rows).find((x) => x.id === old.id) as Record<string, any>
+    expect([shown?.status, shown?.summary, shown?.localized]).toEqual(["open", "the gap's own", false])
+  })
+
+  test("[MUST-FAIL] only a reason that STARTS with the prefix reads as the fact: one naming it later stays held (qa k4)", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    await r.write(NODE_KEY, READ_AS_FACT, owner)
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g-p", status: "open", meta: { operator_hold: true, operator_hold_reason: "a person: needs_localization later" } }, detector)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
+  })
+
   test("a retired hold_fact row reads nothing: the hold is honoured again", async () => {
     const r = await fresh()
     const arm = await r.arm()
