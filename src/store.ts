@@ -152,12 +152,27 @@ const closed = (): Set<string> => {
 // A gap a detector found is work too, though no one asked: while the latest detector row for its gap_id says open (and
 // no hold is on it), that row is a root, worked as a request is. Only a detector closes it (a later row of the same gap_id that is not open: its
 // check passed), never a grade or anything the walk writes, so the gap stays work until the check says it is fixed.
+// THE FAILING-TEST GENERATOR'S HOLD IS A FACT (the USER: "Read as facts"; 11-15 "fact + debit, NO hold"). pull-sync's
+// generator held a gap it could not localize (operator_hold, its reason "needs_localization: …"): that hold says only
+// that no source frame names the edit site, so it is read as the fact "not localized" and holds nothing. The gap is
+// work, and a producer is shown localized false in place of the hold (projected). No stored row is rewritten. Any other
+// hold (a person's, any later kind) is honoured as before.
+const LOCALIZATION_HOLD = "needs_localization"
+const holdOf = (r: Row): { hold: boolean; reason: string } => {
+  const m = (r.meta ?? {}) as { operator_hold?: unknown; operator_hold_reason?: unknown }
+  return { hold: r.operator_hold === true || m.operator_hold === true, reason: String(r.operator_hold_reason ?? m.operator_hold_reason ?? "") }
+}
+export const localizationOnly = (r: Row): boolean => {
+  const h = holdOf(r)
+  return h.hold && h.reason.startsWith(LOCALIZATION_HOLD)
+}
+
 const openGaps = (from: Row[]): Row[] => {
   const latest = new Map<string, Row>()
   for (const r of from.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined)) latest.set(String(r.gap_id), r)
-  // A gap held by a person (operator_hold on its latest row, kept in its meta by the detector) is no one's work until
+  // A gap held by a person (operator_hold on its latest row, kept in its meta by the detector; not the generator's fact, above) is no one's work until
   // the hold lifts: it is not a root.
-  const held = (r: Row): boolean => r.operator_hold === true || (r.meta as { operator_hold?: unknown } | undefined)?.operator_hold === true
+  const held = (r: Row): boolean => holdOf(r).hold && !localizationOnly(r)
   // A gap a person judged to have a wrong test (check_runnable false on its latest row, written by the detector's
   // release from that person's r 0) is no one's work here either: a change must not edit the check that verifies it, so
   // nothing the walk could do on it is allowed, not a clone, an edit, a commit or a landing in a clone made before. The
@@ -456,6 +471,12 @@ export const oneCall = (callId: string): Call[] => {
 export const projected = (rs: Row[]): Row[] => {
   const refusedSel = new Set(rs.filter((r) => r.shape === FAILURE && r.refused === "schema").map((r) => String(r.selection_ref)))
   return rs.map((r) => {
+    if (r.shape === GAP && localizationOnly(r)) {
+      const { operator_hold: _h, operator_hold_reason: _hr, ...rest } = r
+      const meta = typeof r.meta === "object" && r.meta !== null
+        ? (({ operator_hold: _mh, operator_hold_reason: _mhr, ...m }) => m)(r.meta as Record<string, unknown>) : r.meta
+      return { ...rest, ...(meta !== undefined ? { meta } : {}), localized: false } as Row
+    }
     if (r.shape !== SELECTION || refusedSel.has(r.id)) return r
     const { pool_refs, input_refs, ...rest } = r
     return { ...rest, input_refs: [], refs_omitted: [pool_refs ?? []].flat().length + [input_refs ?? []].flat().length } as Row

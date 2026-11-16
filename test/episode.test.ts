@@ -515,6 +515,31 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([lifted.id])
   })
 
+  test("[MUST-FAIL] the failing-test generator's hold is a fact (the USER: \"Read as facts\"): the gap is work, shown as localized false; the stored row is unchanged", async () => {
+    const r = await fresh()
+    await r.arm()
+    const meta = { operator_hold: true, operator_hold_reason: "needs_localization: no source frame", filed_by: "pull-sync failing-test generator" }
+    const old = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", waits_for: "person", meta }, detector)
+    const fresh2 = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-new", status: "open", waits_for: "person", meta: { localized: false } }, detector)
+    const all = await r.episodes()
+    expect(all.roots.map((x) => x.root.id).sort()).toEqual([old.id, fresh2.id].sort())
+    const shown = all.roots.flatMap((x) => x.rows).find((x) => x.id === old.id) as Record<string, any>
+    expect([shown?.localized, shown?.operator_hold, shown?.meta?.operator_hold, shown?.meta?.operator_hold_reason, shown?.meta?.filed_by])
+      .toEqual([false, undefined, undefined, undefined, "pull-sync failing-test generator"])
+    const stored = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap", ids: [old.id] })) as Record<string, any>[])[0]
+    expect(stored?.meta).toEqual(meta)
+  })
+
+  test("[MUST-FAIL] a hold for any other reason is honoured as before: not a root, and shown as written", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const meta = { operator_hold: true, operator_hold_reason: "a person is reviewing this gap" }
+    const held = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-p", status: "open", meta }, detector)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
+    const { projected } = await import("../src/store")
+    expect(projected([held as any])[0]).toEqual(held)
+  })
+
   test("[MUST-FAIL] a gap a person judged to have a wrong test (check_runnable false) is no one's work: not a root, until a later row clears it", async () => {
     const r = await fresh()
     const arm = await r.arm()
