@@ -79,6 +79,16 @@ describe("a deadline that passed ungraded lapses by rule", () => {
     expect(lapseOf(rows, due)).toMatchObject({ ok: false, refused: "untreated" })
     expect(F.fold(rows, ["due-cell"], seq, seq)[0]).toMatchObject({ cell: "due-cell", alpha: 1, beta: 1 })
   })
+  test("[MUST-FAIL] waiting on a person when the deadline passed, and the person's own grade is the first row after it: no lapse", () => {
+    const w = world()
+    const aSel = row("selection", "walk", { arm: "treated", cell: "answer", root: w.ask.id })
+    const answer = row("answer", "described", { text: "t", selection_ref: aSel.id, input_refs: [w.ask.id] }, 10_000)
+    const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })
+    const wait = row("failure", "walk", { call_id: "c1", selection_ref: s.id, status: 409, waits_for: "person", input_refs: [s.id] }, 20_000)
+    const mark = row("outcome", "person", { r: 0, input_refs: [answer.id] }, 120_000) // the first row past the deadline
+    const g = lapseOf([...w.base, aSel, answer, s, wait, mark], w.due)
+    expect(g?.ok).toBe(false)
+  })
   test("[MUST-FAIL] none while a call on the ask waits on a person; a later person grade overtakes it", () => {
     const w = world()
     const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })

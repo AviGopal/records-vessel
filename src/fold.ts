@@ -303,7 +303,10 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     if (at === undefined) continue
     const s = sels.get(String(due.selection_ref))
     const refused = s === undefined || !treated(s.id) ? "untreated"
-      : overtaken(ask, at.seq) ? "person_later" : waitingAt(ask, at.seq) ? "person_wait" : undefined
+      // the wait as it stood when the deadline passed: every row strictly before the row that shows it passed (seq
+      // at.seq - 0.5: a wait written just before counts, and a person row AT it does not end the wait). That row may be
+      // the person's own mark, which speaks after the deadline, not before it (deployment)
+      : overtaken(ask, at.seq) ? "person_later" : waitingAt(ask, at.seq - 0.5) ? "person_wait" : undefined
     const weights = new Map<string, number>()
     if (refused === undefined && s !== undefined) {
       for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel)) {
