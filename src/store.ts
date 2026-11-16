@@ -233,6 +233,10 @@ const rootRows = (w: string, root: Row, cites: Map<string, Set<string>> = citedB
     ...rows.filter((r) => r.role === DESCRIBED).filter((r) => r.shape !== ACTIVITY_TEMPLATE).filter((r) => sels.has(String(r.selection_ref))),
     ...rows.filter((r) => r.role === WALK && r.writer === w).filter((r) => !MINE.has(r.shape)).filter((r) => sels.has(String(r.selection_ref))),
   ].map((r) => r.id))
+  // A person's row about anything of this root (a mark on its diff, a grade of its answer, a word on its ask) is the
+  // root's too: it cites one of the rows above. Without it the walk never saw the person's verdict a call waited on (a
+  // landing waiting for a person's mark on its diff), and producers were never shown it.
+  for (const r of rows.filter((x) => x.role === PERSON && [x.input_refs].flat().some((id) => keep.has(String(id))))) keep.add(r.id)
   return rows.filter((r) => keep.has(r.id))
 }
 

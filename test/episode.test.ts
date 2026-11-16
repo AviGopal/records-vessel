@@ -487,6 +487,24 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
   })
 
+  test("[MUST-FAIL] a person's mark on a root's diff (citing the diff, not the ask) is in that root's rows; one on another root's diff is not", async () => {
+    const r = await fresh()
+    await r.arm()
+    const ask = await r.ask("land it")
+    const sel = await r.select(ask.id)
+    const diff = await r.write(NODE_KEY, { shape: "gitDiff", tree: "t1", call_id: "c1", selection_ref: sel.id, input_refs: [ask.id] }, walk)
+    await r.write(NODE_KEY, { shape: "failure", call_id: "c2", selection_ref: sel.id, status: 409, waits_for: "person", input_refs: [sel.id] }, walk)
+    const mark = await r.write(PERSON_KEY, { shape: "land_verdict", r: 1, repo: "x", tree: "t1", input_refs: [diff.id] })
+    const other = await r.ask("another")
+    const sel2 = await r.select(other.id)
+    const diff2 = await r.write(NODE_KEY, { shape: "gitDiff", tree: "t2", call_id: "c3", selection_ref: sel2.id, input_refs: [other.id] }, walk)
+    const mark2 = await r.write(PERSON_KEY, { shape: "land_verdict", r: 1, repo: "x", tree: "t2", input_refs: [diff2.id] })
+    const all = await r.episodes()
+    const rowsOf = (id: string) => all.roots.find((x) => x.root.id === id)?.rows.map((x) => x.id) ?? []
+    expect([rowsOf(ask.id).includes(mark.id), rowsOf(ask.id).includes(mark2.id)]).toEqual([true, false])
+    expect(rowsOf(other.id).includes(mark2.id)).toBe(true)
+  })
+
   test("[MUST-FAIL] a gap a person holds is no one's work: not a root while held, a root again once a later row lifts it", async () => {
     const r = await fresh()
     const arm = await r.arm()
