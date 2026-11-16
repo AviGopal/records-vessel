@@ -479,18 +479,25 @@ export const oneCall = (callId: string): Call[] => {
 // unless such a refusal in the same answer cites it. Each one left out says so (refs_omitted: how many ids, and an
 // empty input_refs), so a reader can tell a list left out from an empty one. Only selections are projected; the
 // stored rows are unchanged, and every reader inside records (the fold, closing, templates) reads them whole.
-export const projected = (rs: Row[]): Row[] => {
-  const refusedSel = new Set(rs.filter((r) => r.shape === FAILURE && r.refused === "schema").map((r) => String(r.selection_ref)))
-  const facts = rs.some((r) => r.shape === GAP) ? holdFacts() : []
+// A HOLD THE OWNER READS AS A FACT is shown as its fact on EVERY read that returns rows, not only the walk's episodes
+// (agf_98l3jzumfcrq: a producer reading a gap by id got the raw hold, and answered that the gap waits for its release).
+// The stored rows are unchanged.
+export const factsOn = (rs: Row[]): Row[] => {
+  if (!rs.some((r) => r.shape === GAP)) return rs
+  const facts = holdFacts()
   return rs.map((r) => {
     const fact = r.shape === GAP ? factOf(r, facts) : undefined
-    if (fact !== undefined) {
-      const { operator_hold: _h, operator_hold_reason: _hr, ...rest } = r
-      const meta = typeof r.meta === "object" && r.meta !== null
-        ? (({ operator_hold: _mh, operator_hold_reason: _mhr, ...m }) => m)(r.meta as Record<string, unknown>) : r.meta
-      // the row's own fields win over the fact's: the fact replaces the hold, never what the row says
-      return { ...fact, ...rest, ...(meta !== undefined ? { meta } : {}) } as Row
-    }
+    if (fact === undefined) return r
+    const { operator_hold: _h, operator_hold_reason: _hr, ...rest } = r
+    const meta = typeof r.meta === "object" && r.meta !== null
+      ? (({ operator_hold: _mh, operator_hold_reason: _mhr, ...m }) => m)(r.meta as Record<string, unknown>) : r.meta
+    // the row's own fields win over the fact's: the fact replaces the hold, never what the row says
+    return { ...fact, ...rest, ...(meta !== undefined ? { meta } : {}) } as Row
+  })
+}
+export const projected = (rs: Row[]): Row[] => {
+  const refusedSel = new Set(rs.filter((r) => r.shape === FAILURE && r.refused === "schema").map((r) => String(r.selection_ref)))
+  return factsOn(rs).map((r) => {
     if (r.shape !== SELECTION || refusedSel.has(r.id)) return r
     const { pool_refs, input_refs, ...rest } = r
     return { ...rest, input_refs: [], refs_omitted: [pool_refs ?? []].flat().length + [input_refs ?? []].flat().length } as Row
@@ -534,5 +541,8 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
     const all = episodes(q.episode)
     return { shared: projected(withStanding(all.shared)), roots: all.roots.map((x) => ({ ...x, rows: projected(withStanding(x.rows)) })) }
   }
-  return withStanding(read(q))
+  // Any other read ({ids}, {shape}, {where}): the selections are answered whole (a reader by id wants their refs), but a
+  // hold the owner reads as a fact is shown as its fact here too. A call's stored output (rootCalls, oneCall, walkCalls)
+  // is the answer the call got, kept as it was: a records read in it was made through this function.
+  return withStanding(factsOn(read(q)))
 }

@@ -530,8 +530,27 @@ describe("the walk's episode", () => {
     const shown = all.roots.flatMap((x) => x.rows).find((x) => x.id === old.id) as Record<string, any>
     expect([shown?.localized, shown?.operator_hold, shown?.meta?.operator_hold, shown?.meta?.operator_hold_reason, shown?.meta?.filed_by])
       .toEqual([false, undefined, undefined, undefined, "pull-sync failing-test generator"])
+    // the stored row is unchanged: with the owner's row retired, the same read shows the hold as written
+    await r.write(NODE_KEY, { ...READ_AS_FACT, retired: true }, owner)
     const stored = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap", ids: [old.id] })) as Record<string, any>[])[0]
     expect(stored?.meta).toEqual(GEN_HOLD)
+  })
+
+  test("[MUST-FAIL] every read that returns the gap row shows the fact, not the hold: by id, by shape, by where (agf_98l3jzumfcrq)", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, READ_AS_FACT, owner)
+    const held = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", meta: GEN_HOLD }, detector)
+    const reads = [{ ids: [held.id] }, { shape: "gap" }, { shape: "gap", where: { gap_id: "g-old" } }, { shape: "gap", latest_by: "gap_id", where: { status: "open" } }]
+    for (const q of reads) {
+      const got = ((await r.call(NODE_KEY, { type: "record_read", ...q })) as Record<string, any>[]).find((x) => x.id === held.id)
+      expect([JSON.stringify(q), got?.localized, got?.operator_hold, got?.meta?.operator_hold, got?.meta?.operator_hold_reason, got?.meta?.filed_by])
+        .toEqual([JSON.stringify(q), false, undefined, undefined, undefined, "pull-sync failing-test generator"])
+    }
+    // a selection read by id is answered whole (its refs kept): only the episode answers trim them
+    const sel = await r.select(held.id)
+    const back = ((await r.call(NODE_KEY, { type: "record_read", ids: [sel.id] })) as Record<string, any>[])[0]
+    expect(back?.input_refs).toEqual([held.id])
   })
 
   test("[MUST-FAIL] with no hold_fact row, every hold is honoured as today: the generator's hold is not a root", async () => {
