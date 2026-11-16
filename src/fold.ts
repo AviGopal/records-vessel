@@ -182,7 +182,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // when, not the grader's fault, so it debits no one. The walk's due/grade rule is to stop offering such a grade (not yet
   // installed); this is the same rule where grades count, for one the grader judges anyway. A person's grade is never
   // exempt. With no deadline row for the ask the promise stays exempt from the grader; the promise rule (kept or broken
-  // within the owner's window) still grades it where a change was wanted (database, 11-16: no root lacks both).
+  // within the owner's window) still grades it where a change was wanted.
   const firstDeadline = (ask: string): number | undefined => seen
     .filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number" && refsOf(r).includes(ask))
     .sort((a, b) => a.seq - b.seq)[0]?.at as number | undefined
