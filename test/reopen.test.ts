@@ -91,3 +91,38 @@ describe("a lapse while the request waited on a person", () => {
     expect(standingOf([...w.base, otherSel, otherWait, ...l], l[1].id)).toBe("counted")
   })
 })
+
+describe("which answers promise (the owner's newest outcome schema)", () => {
+  const ENTRY = [{ shape: "answer", deferred_by: "next_act" }]
+  const schema = (fields: Record<string, unknown>, role = "owner") => row("shape_schema", role, { target: "outcome", context: ["answer"], ...fields })
+  const promise = () => row("answer", "described", { text: "not yet", next_act: { tool: "git_land" } })
+  test("[MUST-FAIL] the owner's newest non-variant schema decides; a guard: its entry makes a promise", () => {
+    seq = 0
+    const s = schema({ evidence: ENTRY }); const a = promise()
+    expect(F.promises([s, a] as any, a as any)).toBe(true)
+  })
+  test("[MUST-FAIL] a schema row anyone but the owner wrote marks nothing", () => {
+    seq = 0
+    const s = schema({ evidence: ENTRY }, "described"); const a = promise()
+    expect(F.promises([s, a] as any, a as any)).toBe(false)
+  })
+  test("[MUST-FAIL] a variant's schema marks nothing", () => {
+    seq = 0
+    const s = schema({ evidence: ENTRY, variant: "v2" }); const a = promise()
+    expect(F.promises([s, a] as any, a as any)).toBe(false)
+  })
+  test("[MUST-FAIL] a newer owner schema without the entry turns promises off; a newer one with it turns them on", () => {
+    seq = 0
+    const old = schema({ evidence: ENTRY }); const now = schema({}); const a = promise()
+    expect(F.promises([old, now, a] as any, a as any)).toBe(false)
+    seq = 0
+    const old2 = schema({}); const now2 = schema({ evidence: ENTRY }); const a2 = promise()
+    expect(F.promises([old2, now2, a2] as any, a2 as any)).toBe(true)
+  })
+  test("[MUST-FAIL] an answer whose field is null or absent does not promise", () => {
+    seq = 0
+    const s = schema({ evidence: ENTRY })
+    const nul = row("answer", "described", { text: "t", next_act: null }); const none = row("answer", "described", { text: "t" })
+    expect([F.promises([s, nul] as any, nul as any), F.promises([s, none] as any, none as any)]).toEqual([false, false])
+  })
+})

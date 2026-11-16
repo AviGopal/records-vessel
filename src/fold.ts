@@ -244,8 +244,9 @@ export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
 // AN ANSWER THAT PROMISES THE NEXT ACT IS NOT THE RESULT (the USER, 11-16 ~10:25Z: "Accurate, not done"). A person's
 // Right on it says the answer is true, not that the work is done: the request stays open, and the promise is graded by
 // what happens. Which answers promise is the owner's to say, in its newest outcome schema's evidence: an entry
-// {shape, deferred_by: f} marks a row of that shape carrying f as a promise (the walk reads the same entry: such an
-// answer waits for its ask's first deadline). With no such entry, no answer promises, as before.
+// {shape, deferred_by: f} marks a row of that shape carrying f (not null) as a promise; only the owner's newest
+// non-variant schema counts. The walk's due/grade rule is to read the same entry (not yet installed). With no such
+// entry, no answer promises, as before.
 export const promises = (all: Row[], r: Row | undefined): boolean => {
   if (r === undefined) return false
   const schema = all.filter((x) => x.shape === SHAPE_SCHEMA && x.role === OWNER && String(x.target) === OUTCOME && !x.variant)
