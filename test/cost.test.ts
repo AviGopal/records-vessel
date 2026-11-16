@@ -16,7 +16,7 @@ describe("a read's cost", () => {
     const read = () => costed("record_read", { shape: "outcome" }, () => grades(rows, seq, seq), (l) => lines.push(l))
     read()
     expect(lines.length).toBe(1)
-    expect(lines[0]).toMatch(/^\[records\] record_read took \d+ ms; refolded gradesOf \d+ ms over 2 rows; query \{"shape":"outcome"\}$/)
+    expect(lines[0]).toMatch(/^\[records\] record_read took \d+ ms; refolded gradesOf \d+ ms over 2 rows; query outcome$/)
     read() // nothing written since: the kept fold answers
     expect(lines.length).toBe(1)
     rows.push(outcome()) // the store moved: the next read refolds
@@ -38,4 +38,16 @@ describe("a read's cost", () => {
     expect(drainRefolds().map((f) => [f.fold, f.rows])).toEqual([["gradesOf", 1]])
     expect(drainRefolds()).toEqual([])
   })
+
+describe("what the line says of the query", () => {
+  test("[MUST-FAIL] a where value of person text never reaches the line: its shape, field names and value lengths only", () => {
+    const rows: Row[] = [outcome()]
+    const lines: string[] = []
+    const q = { type: "record_read", shape: "answer", refs_to: "root-abc", where: { role: "person", note: "my private words" } }
+    costed("record_read", q, () => grades(rows, seq, seq), (l) => lines.push(l))
+    expect(lines[0]).not.toContain("my private words")
+    expect(lines[0]).not.toContain("root-abc")
+    expect(lines[0]).toEndWith("query answer refs_to:10 where{role:8,note:18}")
+  })
+})
 })
