@@ -39,21 +39,41 @@ describe("a deadline that passed ungraded lapses by rule", () => {
     const rows = [...w.base, later, tick(120_000)]
     expect([lapseOf(rows, w.due)?.ok, lapseOf(rows, later)]).toEqual([true, undefined])
   })
-  test("[MUST-FAIL] a counted written lapse is the one grade: no derived second", () => {
+  test("[MUST-FAIL] the walk's grader writing r 0 on the deadline is kept and counts for nothing: the rule's lapse is the one grade, one debit", () => {
     const w = world()
     const gSel = row("selection", "walk", { arm: "treated", cell: "judge", root: w.ask.id })
     const written = row("outcome", "described", { r: 0, selection_ref: gSel.id, input_refs: [w.ask.id, w.due.id], evidence_refs: [w.due.id] }, 90_000)
     const rows = [...w.base, gSel, written, tick(120_000)]
+    expect(F.grades(rows, seq, seq).find((g) => g.id === written.id)).toMatchObject({ ok: false, refused: "by_rule" })
+    expect(lapseOf(rows, w.due)).toMatchObject({ ok: true, r: 0 })
+    expect(F.fold(rows, ["due-cell"], seq, seq)[0]).toMatchObject({ cell: "due-cell", beta: 2 }) // one debit, not two
+  })
+  test("[MUST-FAIL] on a request waiting on a person, the grader's r 0 on its deadline neither closes it nor debits anyone", () => {
+    const w = world()
+    const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })
+    const wait = row("failure", "walk", { call_id: "c1", selection_ref: s.id, status: 409, waits_for: "person", input_refs: [s.id] }, 20_000)
+    const gSel = row("selection", "walk", { arm: "treated", cell: "judge", root: w.ask.id })
+    const written = row("outcome", "described", { r: 0, selection_ref: gSel.id, input_refs: [w.ask.id, w.due.id], evidence_refs: [w.due.id] }, 90_000)
+    const rows = [...w.base, s, wait, gSel, written, tick(120_000)]
+    expect(F.grades(rows, seq, seq).find((g) => g.id === written.id)).toMatchObject({ ok: false, refused: "by_rule" })
+    expect(F.standing(rows, seq, seq).filter((g) => g.r === 0 && g.deadline)).toEqual([]) // nothing closes it
+    expect(F.fold(rows, ["due-cell"], seq, seq)[0]).toMatchObject({ cell: "due-cell", beta: 1 }) // nothing debited
+  })
+  test("[MUST-FAIL] a person's r 0 on the deadline still counts: it closes the request, and the rule adds no second lapse", () => {
+    const w = world()
+    const mark = row("outcome", "person", { r: 0, input_refs: [w.due.id] }, 90_000)
+    const rows = [...w.base, mark, tick(120_000)]
+    expect(F.grades(rows, seq, seq).find((g) => g.id === mark.id)).toMatchObject({ ok: true, r: 0, deadline: true, by: "person" })
     expect(lapseOf(rows, w.due)).toBeUndefined()
   })
-  test("[MUST-FAIL] an ask a counted written lapse already closed (on a later deadline) gets no second, derived one", () => {
+  test("[MUST-FAIL] the grader's r 0 on a later deadline closes nothing either: the first deadline lapses by rule", () => {
     const w = world()
     const later = row("due", "described", { within_ms: 1000, at: T0 + 90_000, selection_ref: w.dueSel.id, input_refs: [w.ask.id] }, 5_000)
     const gSel = row("selection", "walk", { arm: "treated", cell: "judge", root: w.ask.id })
     const written = row("outcome", "described", { r: 0, selection_ref: gSel.id, input_refs: [w.ask.id, later.id], evidence_refs: [later.id] }, 100_000)
     const rows = [...w.base, later, gSel, written, tick(120_000)]
-    expect(F.grades(rows, seq, seq).find((g) => g.id === written.id)).toMatchObject({ ok: true, deadline: true }) // closed by it
-    expect(lapseOf(rows, w.due)).toBeUndefined()
+    expect(F.grades(rows, seq, seq).find((g) => g.id === written.id)).toMatchObject({ ok: false, refused: "by_rule" })
+    expect(lapseOf(rows, w.due)).toMatchObject({ ok: true, r: 0 })
   })
   test("[MUST-FAIL] a person's Right on a result closes the ask: no lapse", () => {
     const w = world()

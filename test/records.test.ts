@@ -207,9 +207,15 @@ describe("records vessel", () => {
     await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, gradedDue.id], evidence_refs: [gradedDue.id] }, desc)
     const got = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
     expect(got.status).toBe(200)
-    // ask: a counted lapse grade (r 0 on gradedDue) has closed it, so nothing more of it lapses, lapsedDue included.
+    // ask: the grader's r 0 on gradedDue counts for nothing (the rule records deadlines), so it closes nothing: ask's
+    // first deadline (lapsedDue) passed ungraded and is listed; gradedDue, which a grade was written of, is not.
     // ask2: an answer from the walk alone does not end a request, so its first deadline lapsed.
-    expect((got.body as Array<{ id: string }>).map((r) => r.id)).toEqual([answeredDue.id])
+    expect((got.body as Array<{ id: string }>).map((r) => r.id).sort()).toEqual([lapsedDue.id, answeredDue.id].sort())
+    // [MUST-FAIL] once a grade is written of it, a deadline is not listed again, though that grade counts for nothing:
+    // listed, the grader would be shown it, and write it, every time
+    await write(NODE_KEY, { shape: "outcome", r: 0, selection_ref: sel.id, input_refs: [ask.id, lapsedDue.id], evidence_refs: [lapsedDue.id] }, desc)
+    const again = await call(NODE_KEY, { type: "record_lapsed", deadline_shape: "due", answer_shape: "answer" })
+    expect((again.body as Array<{ id: string }>).map((r) => r.id)).toEqual([answeredDue.id])
     expect(lapsedDue.id).toBeDefined()
     expect((await call(NODE_KEY, { type: "record_lapsed" })).status).toBe(400)
   })

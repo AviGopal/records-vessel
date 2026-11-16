@@ -414,7 +414,9 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number,
   const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => exo.has(id))
   // what a written grade judged or closed: the fold's own derived lapses (fold.ts LAPSE) are what this lists, by the wall
   // clock, so they neither hide it nor close the ask here
-  const judged = new Set(standing(rows, seq, seq).filter((k) => k.by !== LAPSE).map((k) => k.judged))
+  // and a grade a model wrote of a deadline, which counts for nothing (fold.ts by_rule) but was written: listed again, the
+  // grader would be shown it, and write it, every time
+  const judged = new Set(grades(rows, seq, seq).filter((k) => k.by !== LAPSE && (k.ok || k.refused === "by_rule")).map((k) => k.judged))
   const done = closed(false)
   // A request's deadline is its FIRST deadline row: a later one, written after an answer, does not move it, or a
   // request answered only by its own walk would renew its deadline forever and never close. Only a person's verdict

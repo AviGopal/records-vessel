@@ -146,7 +146,8 @@ describe("posterior fold", () => {
     expect(at(late, "step")).toEqual({ cell: "step", ...still }) // in the due's pool, not consumed
     expect(at(late, "wait-cell")).toEqual({ cell: "wait-cell", ...still }) // the rule for waits after a deadline is gone
     const heavier = travel({ w_lapse: 3 })
-    expect(fold([...base, ...rows, heavier, late], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 4 })
+    // a row after the deadline last, so the store's clock (its newest row) is past it and the rule's lapse is there
+    expect(fold([...base, ...rows, heavier, lapse({})], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 4 })
     expect(at(lapse({ t: "2026-11-10T09:59:00Z" }), "due-cell")).toEqual({ cell: "due-cell", ...still })
     // a grader's r 1 on the deadline counts for nothing (refused), and the deadline has passed by the store's clock: the
     // rule records the lapse (the USER, 11-16: "Yes, a fixed rule records it"); before, nothing was recorded at all
@@ -214,7 +215,8 @@ describe("posterior fold", () => {
     const [g1, g2] = [lapseOf(theirs), lapseOf(mine)]
     const gs = F.grades([...base, other, theirs, mine, g1, g2], seq, seq)
     expect(gs.find((x) => x.id === g1.id)).toMatchObject({ ok: false, refused: "judged" })
-    expect(gs.find((x) => x.id === g2.id)).toMatchObject({ ok: true, deadline: true }) // its own request's lapse still counts (a guard)
+    // its own request's deadline grade gets past "judged" to the rule's check (a guard): kept, counting for nothing
+    expect(gs.find((x) => x.id === g2.id)).toMatchObject({ ok: false, deadline: true, refused: "by_rule" })
   })
 
   test("[MUST-FAIL] (B) what a grade may judge is read from the owner's newest outcome schema: another described row it saw makes it unclean", () => {
@@ -235,7 +237,8 @@ describe("posterior fold", () => {
     const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id, hop.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
     const sawHops = grade({ input_refs: [ask.id, answer.id, hop.id] }) // an answer grade that saw the walk's hops: refused
     const t = F.tally?.([...base, dueSel, due, graderSel, lapse, sawHops, person], seq, seq)
-    expect(t).toEqual({ written: { answer: 1, lapse: 1, detector: 0 }, counted: { answer: 0, lapse: 1, detector: 0 }, refused: { unclean: 1 } })
+    // a lapse the grader writes is kept and counts for nothing: the rule records deadlines (the USER, 11-16)
+    expect(t).toEqual({ written: { answer: 1, lapse: 1, detector: 0 }, counted: { answer: 0, lapse: 0, detector: 0 }, refused: { unclean: 1, by_rule: 1 } })
   })
 
   test("a row with only a guessed `at` (no within_ms) is not a deadline: no waits are debited", () => {

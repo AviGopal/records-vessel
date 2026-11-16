@@ -245,6 +245,14 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       : exempt(o, j) ? "exempt"
       : o.role !== PERSON && !(clean || lapse) ? "unclean"
       : !timely ? "untimely"
+      // (after untimely: an early grade, or an r 1, of a deadline was never a lapse and stays untimely, so it hides nothing
+      // from record_lapsed)
+      // A DEADLINE IS THE RULE'S TO RECORD (the USER, 11-16: "Yes, a fixed rule records it"). A model's grade of a
+      // deadline row is kept, and counts for nothing: it neither closes the request nor debits anyone, and the deadline
+      // stays ungraded, so the rule's own lapse (derived below) decides it, with the rule's exemptions (a person's later
+      // grade, a wait on a person). Otherwise the walk's grader, choosing its own moment, closed a person's ask failed
+      // with no person's mark and no rule (489005d3, 2814ca76). A person's grade of a deadline is theirs to give.
+      : deadline && o.role !== PERSON ? "by_rule"
       : lapse && refsOf(j).some((req) => overtaken(req, o.seq)) ? "person_later"
       : lapse && refsOf(j).some((req) => waitingAt(req, o.seq)) ? "person_wait"
       : undefined
