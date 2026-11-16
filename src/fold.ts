@@ -176,6 +176,19 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const w = waits.filter((f) => f.seq < at && String(sels.get(String(f.selection_ref))?.root) === req).sort((a, b) => a.seq - b.seq).at(-1)
     return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq < at && (p.id === req || about(p, req)))
   }
+  // A PROMISE IS EXEMPT FROM THE GRADER UNTIL ITS ASK'S FIRST DEADLINE (the USER, 11-16: "Exempt until deadline"; its
+  // promise is graded by what happens next). A grade the walk's grader wrote of an answer that promises (promises(), the
+  // owner's entry) before the first deadline of the ask it answers has come counts for nothing ("exempt"): a fact about
+  // when, not the grader's fault, so it debits no one. The walk does not offer such a grade (applicable.ts meets()); this
+  // is the same rule where grades count, for one the grader judged anyway. A person's grade is never exempt.
+  const firstDeadline = (ask: string): number | undefined => seen
+    .filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number" && refsOf(r).includes(ask))
+    .sort((a, b) => a.seq - b.seq)[0]?.at as number | undefined
+  const exempt = (o: Row, j: Row | undefined): boolean => {
+    if (o.role === PERSON || j === undefined || !promises(seen, j)) return false
+    const asks = refsOf(j).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
+    return asks.length > 0 && asks.every((ask) => { const at = firstDeadline(ask); return at === undefined || at > Date.parse(String(o.t)) })
+  }
   const credit = (o: Row): Grade => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
     const answers = saw.filter((r) => r !== undefined && r.role === DESCRIBED && r.shape !== OUTCOME && gradable(r))
@@ -197,6 +210,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const refused = !(typeof o.r === "number" && Number.isFinite(r) && r >= 0 && r <= 1) ? "r"
       : judged.length !== 1 || !ours ? "judged"
       : s === undefined || !treated(s.id) || (o.role !== PERSON && !treated(o.selection_ref)) ? "untreated"
+      : exempt(o, j) ? "exempt"
       : o.role !== PERSON && !(clean || lapse) ? "unclean"
       : !timely ? "untimely"
       : lapse && refsOf(j).some((req) => overtaken(req, o.seq)) ? "person_later"
