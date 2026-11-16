@@ -50,4 +50,30 @@ describe("what the line says of the query", () => {
     expect(lines[0]).toEndWith("query answer refs_to:10 where{role:8,note:18}")
   })
 })
+
+describe("the cost on the answer", () => {
+  test("[MUST-FAIL] an object answer carries its cost: time and each fold redone, counts and durations only", () => {
+    const rows: Row[] = [outcome(), outcome()]
+    const v = costed("posterior", { as_of_seq: 9 }, () => ({ at_seq: seq, n: grades(rows, seq, seq).length }), () => {}) as Record<string, any>
+    expect(v.at_seq).toBe(seq)
+    expect(typeof v.cost.ms).toBe("number")
+    expect(v.cost.refolded.map((f: any) => [f.fold, f.rows, typeof f.ms])).toEqual([["gradesOf", 2, "number"]])
+    const again = costed("posterior", {}, () => ({ n: grades(rows, seq, seq).length }), () => {}) as Record<string, any>
+    expect(again.cost.refolded).toEqual([])
+  })
+
+  test("a list answer is returned as it is", () => {
+    const list = [{ shape: "x" }]
+    expect(costed("record_read", {}, () => list, () => {})).toBe(list)
+  })
+
+  test("[MUST-FAIL] a name a caller chose is cut at 40 characters on the line", () => {
+    const rows: Row[] = [outcome()]
+    const lines: string[] = []
+    const long = "Alice private note that goes on and on and on"
+    costed("record_read", { shape: long, where: { [long]: 1 } }, () => grades(rows, seq, seq), (l) => lines.push(l))
+    expect(lines[0]).not.toContain(long)
+    expect(lines[0]).toEndWith(`query ${long.slice(0, 40)}… where{${long.slice(0, 40)}…:1}`)
+  })
+})
 })
