@@ -750,6 +750,20 @@ describe("the walk's episode", () => {
     expect(await roots()).not.toContain(a.id) // the result, judged right: closed as reached
   })
 
+  test("[MUST-FAIL] the owner's evidence entry written after a read takes effect without a restart (records installs before the seed)", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = (await r.ask("land it")) as { id: string }
+    const sel = await r.select(a.id)
+    const promise = await r.write(NODE_KEY, { shape: "answer", text: "not landed yet", next_act: { tool: "git_land", target: "x" }, selection_ref: sel.id, input_refs: [a.id] }, desc)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [promise.id] })
+    const roots = async () => (await r.episodes()).roots.map((x: any) => x.root.id)
+    expect(await roots()).not.toContain(a.id) // no evidence entry yet: a Right closes it, as before
+    await r.write(NODE_KEY, { shape: "shape_schema", target: "outcome", inputs: ["world_changed"], context: ["answer"],
+      evidence: [{ shape: "answer", deferred_by: "next_act" }] }, owner)
+    expect(await roots()).toContain(a.id) // the seed's row is read at once: the Right was on a promise
+  })
+
   test("[MUST-FAIL] which answers promise is the owner's: with no evidence entry for answers (one for another shape), a Right on an answer carrying next_act closes as before", async () => {
     const r = await fresh()
     await r.arm()
