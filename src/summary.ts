@@ -42,11 +42,15 @@ const NEVER = /^(writer|signature|by_key)$|key|token|secret|password|credential/
 // The keys a summary query takes, read from its declared schema (one list, never a second one to drift) and the
 // call's type; any other is refused, so a summary is never quietly wider than asked (qa).
 const SUMMARY_KEYS = new Set(["type", ...Object.keys(SUMMARY_INPUTS.properties)])
+/** A refusal of what the caller asked, thrown from inside a handler: answered 400, as the caller's (index.ts). Any other
+ * throw is records failing. */
+export class Refused extends Error {}
+
 /** A summary query, read and answered: refused (thrown) when it carries any other key or lacks shape or summarize. */
 export const serveSummary = (rows: Row[], q: Record<string, unknown>): Summary => {
   const extra = Object.keys(q).filter((k) => !SUMMARY_KEYS.has(k))
-  if (extra.length > 0) throw new Error(`record_summary takes only shape, summarize and top: not ${extra.join(", ")}`)
-  if (typeof q.shape !== "string" || !Array.isArray(q.summarize)) throw new Error("record_summary needs shape and summarize")
+  if (extra.length > 0) throw new Refused(`record_summary takes only shape, summarize and top: not ${extra.join(", ")}`)
+  if (typeof q.shape !== "string" || !Array.isArray(q.summarize)) throw new Refused("record_summary needs shape and summarize")
   return summarize(rows, q.shape, q.summarize.map(String), q.top === undefined ? undefined : Number(q.top))
 }
 // A value shown must be short enough to be a key or a type (a shape, a tool, a status), not a person's words.

@@ -27,6 +27,8 @@ export type Query = {
   has?: string
   // Rows as written: no hold shown as its fact (factsOn). For a reader that writes rows back (pull-sync's gap upkeep).
   stored?: boolean
+  // The newest N of the rows the read matches, in seq order: a bound on what one read can serialize.
+  limit?: number
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW, HOLD_FACT])
@@ -553,6 +555,17 @@ const withStanding = (out: Row[]): Row[] => {
   })
 }
 
+// A read that names nothing to narrow by would answer the whole store, serialized in one answer: one such call from any
+// caller can hold records (and every walk reading it) for as long as that takes. So a plain read must name at least one
+// of these, or a limit; what it named is checked here, before any row is read, and refused by name.
+const NARROWS = ["shape", "ids", "after_seq", "refs_to", "where", "latest_by", "has", "limit"] as const
+export const unnarrowed = (q: Query): string | undefined => {
+  if (q.limit !== undefined && !(Number.isInteger(q.limit) && q.limit > 0)) return "record_read limit must be a whole number above 0"
+  if (q.head === true || q.call_id !== undefined || q.episode !== undefined || (q.root !== undefined && q.calls === "all")) return undefined
+  const named = NARROWS.filter((k) => q[k] !== undefined && !(k === "where" && Object.keys(q.where ?? {}).length === 0))
+  return named.length > 0 ? undefined : `record_read names nothing to narrow by: give one of ${NARROWS.join(", ")}`
+}
+
 export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> | { at_seq: number } => {
   // The store's latest seq alone (head: true): what a reader counting "rows written since" counts against, without
   // reading any rows or folding grades.
@@ -570,5 +583,7 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   // Any other read ({ids}, {shape}, {where}): the selections are answered whole (a reader by id wants their refs), but a
   // hold the owner reads as a fact is shown as its fact here too. A call's stored output (rootCalls, oneCall, walkCalls)
   // is the answer the call got, kept as it was: a records read in it was made through this function.
-  return withStanding(q.stored === true ? read(q) : factsOn(read(q)))
+  const matched = read(q)
+  const kept = q.limit === undefined ? matched : matched.slice(-q.limit)
+  return withStanding(q.stored === true ? kept : factsOn(kept))
 }

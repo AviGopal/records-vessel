@@ -2,12 +2,12 @@
 import { type Who, authenticate, ownOrg } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
 import { costed } from "./cost"
-import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } from "./summary"
+import { Refused, SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } from "./summary"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
 import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_SUMMARY, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
-import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
+import { type Query, lapsed, lastSeq, rows, serveRead, unnarrowed, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
   type: string
@@ -109,7 +109,11 @@ const HANDLERS = new Map<string, Handler>([
     return answer(out.status, out.body)
   }],
   // The head alone (head: true) folds nothing and answers the latest seq alone, with no cost beside it.
-  [RECORD_READ, async (p) => answer(200, p.head === true ? serveRead(p) : costed(RECORD_READ, p, () => serveRead(p)))],
+  [RECORD_READ, async (p) => {
+    const refused = unnarrowed(p as Query)
+    if (refused !== undefined) return Response.json({ failure: { status: 400, body: refused } }, { status: 400 })
+    return answer(200, p.head === true ? serveRead(p) : costed(RECORD_READ, p, () => serveRead(p)))
+  }],
   [RECORD_WAIT, async (p) => answer(200, await wait(p.shapes, Number(p.after_seq), p.until === undefined ? undefined : Number(p.until)))],
   [RECORD_WAIT_EXACT, async (p) => answer(200, await waitExact(p.shapes, Number(p.after_seq), p.where))],
   [RECORD_LAPSED, async (p) => {
@@ -135,15 +139,19 @@ const handle = async (req: Request): Promise<Response> => {
   if (!who.ok) {
     return fail(401, "")
   }
+  const p = body?.impulse?.pointer
+  if (p === undefined || typeof p !== "object" || p === null || !HANDLERS.has(p.type)) {
+    return fail(400, type)
+  }
+  // A handler that throws is records failing, not the caller (a refusal of what was asked is thrown as Refused: 400): answered 500 (so the caller's move is not blamed for it)
+  // and said in the journal by shape and error, never with the pointer's values.
   try {
-    const p = (body as { impulse: { pointer: Pointer } }).impulse.pointer
-    if (!HANDLERS.has(p.type)) {
-      return fail(400, p.type)
-    }
     const h = HANDLERS.get(p.type) as Handler
     return await h(p, who)
   } catch (e) {
-    return Response.json({ failure: { status: 400, body: String(e) } }, { status: 400 })
+    if (e instanceof Refused) return Response.json({ failure: { status: 400, body: String(e) } }, { status: 400 })
+    console.error(`[records] ${p.type} failed: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`.slice(0, 400))
+    return Response.json({ failure: { status: 500, body: String(e) } }, { status: 500 })
   }
 }
 

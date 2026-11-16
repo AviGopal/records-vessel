@@ -20,6 +20,7 @@ let identity: Fake
 let dir: string
 let port: number
 let vessel: ReturnType<typeof run>
+let vesselErr = ""
 
 const env = (): Record<string, string> => ({
   RECORDS_VESSEL_ID: "records-test",
@@ -59,6 +60,12 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "records-test-"))
   port = freePort()
   vessel = run("src/index.ts", env())
+  // what the vessel journals, kept for the legs that read it
+  ;(async () => {
+    const rd = (vessel.stderr as ReadableStream<Uint8Array>).getReader()
+    const dec = new TextDecoder()
+    for (;;) { const { value, done } = await rd.read(); if (done) break; vesselErr += dec.decode(value) }
+  })()
   await healthy(port)
   await until(() => discovery.seen.some((s) => s.path === "/register"), "/register")
 })
@@ -306,5 +313,30 @@ describe("records vessel", () => {
     expect(code).toBe(1)
     expect(stderr).toContain("missing env METABOB_API_KEY")
     expect(stderr).not.toContain(NODE_KEY)
+  })
+
+  test("[MUST-FAIL] a read is bounded: a limit keeps the newest N, a read naming nothing to narrow by is refused by name, and a handler that throws answers 500 and says so", async () => {
+    for (const n of [1, 2, 3]) await write(NODE_KEY, { shape: "guard_probe", n, input_refs: [] }, { writer: "w", role: "walk" })
+    const one = await call(NODE_KEY, { type: "record_read", shape: "guard_probe", limit: 1 })
+    expect([one.status, one.body.length, one.body[0]?.n]).toEqual([200, 1, 3])
+    const two = await call(NODE_KEY, { type: "record_read", shape: "guard_probe", limit: 2 })
+    expect(two.body.map((r: any) => r.n)).toEqual([2, 3]) // the newest two, in seq order
+    // a read naming nothing to narrow by: refused by name, before any row is read
+    for (const p of [{}, { stored: true }, { where: {} }]) {
+      const r = await call(NODE_KEY, { type: "record_read", ...p })
+      expect([JSON.stringify(p), r.status, String(r.body?.failure?.body).startsWith("record_read names nothing to narrow by")]).toEqual([JSON.stringify(p), 400, true])
+    }
+    const bad = await call(NODE_KEY, { type: "record_read", shape: "guard_probe", limit: 0 })
+    expect([bad.status, bad.body?.failure?.body]).toEqual([400, "record_read limit must be a whole number above 0"])
+    // a limit alone bounds the read, and the other read forms are not refused
+    expect((await call(NODE_KEY, { type: "record_read", limit: 1 })).body.length).toBe(1)
+    expect((await call(NODE_KEY, { type: "record_read", head: true })).status).toBe(200)
+    // a handler that throws (ids that are not a list) answers 500, and the journal says which shape failed and how
+    const from = vesselErr.length
+    const thrown = await call(NODE_KEY, { type: "record_read", ids: 5 })
+    for (let i = 0; i < 80 && !vesselErr.slice(from).includes("[records] record_read failed"); i++) await Bun.sleep(25)
+    expect([thrown.status, vesselErr.slice(from).includes("[records] record_read failed: TypeError")]).toEqual([500, true])
+    // a pointer naming no shape records serves is still the caller's: 400
+    expect((await call(NODE_KEY, { type: "no_such_shape" })).status).toBe(400)
   })
 })
