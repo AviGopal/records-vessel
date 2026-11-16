@@ -330,7 +330,9 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // never read it. With no credits row, nothing is credited.
 // Residual (debt): an operator fix that lands beside a walk landing on the same gap still credits the walk; a closing
 // row citing what its check judged would tie it causally.
-const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+// The closure grades as first written: every closure scans every treated selection. Kept as the oracle the lazy form
+// below is tested against (byte-equal grades); nothing else calls it.
+export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
   const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
@@ -358,6 +360,53 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
         const chain = sels.filter((s) => s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id))
         const ids = new Set(chain.map((s) => s.id))
         const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
+        out.push({
+          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
+          weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),
+          by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
+        })
+      }
+      since = c.seq
+      open = []
+    }
+  }
+  return out
+}
+
+// A closure's chain (the treated selections it would credit) matters only to a closure that landed: a refused one
+// credits no cell, and its readers (foldFrom keeps landed closures only; tally counts written, counted and refused) read
+// no chain of it. Whether it landed depends on a few rows only: the rule's own tool's ended calls before the closure,
+// each checked against the closure's window and open gap rows through its own selection. So that is decided first, and
+// the chain is gathered only for a closure that landed (database: 22 closures, none landed, each scanning 15,079
+// selections and ~8.8 M refs, 4-5 s of every posterior). The same grades as gapClosuresScan, which the tests hold it to.
+const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
+  const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
+  if (by === undefined) return []
+  const sels = new Map(seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED).map((r) => [r.id, r]))
+  const failed = new Set(seen
+    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+    .map((r) => String(r.selection_ref)))
+  const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started" && r.pointer_type === by)
+    .map((r) => [String(r.call_id), r]))
+  const ended = seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "ended" && started.has(String(r.call_id)))
+  const out: Grade[] = []
+  const byGap = new Map<string, Row[]>()
+  for (const r of seen.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined).sort((a, b) => a.seq - b.seq)) {
+    if (!byGap.has(String(r.gap_id))) byGap.set(String(r.gap_id), [])
+    byGap.get(String(r.gap_id))!.push(r)
+  }
+  for (const rows of byGap.values()) {
+    let since = 0
+    let open: string[] = []
+    for (const c of rows) {
+      if (c.status === "open") { open.push(c.id); continue }
+      if (open.length > 0 && c.seq <= asOf) {
+        const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
+        const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
+        const landed = ended.some((e) => e.seq < c.seq && inChain(sels.get(String(started.get(String(e.call_id))?.selection_ref))))
+        const chain = landed ? [...sels.values()].filter(inChain) : []
         out.push({
           id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
           weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),
