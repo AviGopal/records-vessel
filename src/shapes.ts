@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 export const RECORD_WRITE = "record_write"
 export const RECORD_READ = "record_read"
+// Counts of what rows of one shape hold, never the rows (summary.ts): the only read records declares to schema-filling
+// callers.
+export const RECORD_SUMMARY = "record_summary"
 export const RECORD_WAIT = "record_wait"
 export const RECORD_WAIT_EXACT = "record_wait_exact"
 export const POSTERIOR = "posterior"

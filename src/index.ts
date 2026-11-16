@@ -2,11 +2,11 @@
 import { type Who, authenticate, ownOrg } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
 import { costed } from "./cost"
-import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS } from "./summary"
+import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } from "./summary"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
-import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
+import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_SUMMARY, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
 import { type Query, lapsed, lastSeq, rows, serveRead, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -118,6 +118,7 @@ const HANDLERS = new Map<string, Handler>([
     }
     return answer(200, costed(RECORD_LAPSED, p, () => lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now(), Array.isArray(p.asks) ? p.asks.map(String) : undefined)))
   }],
+  [RECORD_SUMMARY, async (p) => answer(200, costed(RECORD_SUMMARY, p, () => serveSummary(rows, p as Record<string, unknown>)))],
   [POSTERIOR, async (p) => {
     const at = lastSeq()
     return answer(200, costed(POSTERIOR, { as_of_seq: p.as_of_seq, cells: [p.cells ?? []].flat().length }, () =>
@@ -156,9 +157,9 @@ Bun.serve({
     process.exit(1)
   },
 })
-// Only record_read's summary form is declared, so a schema-filling caller (the walk's request producer) can ask what rows
-// hold, never for the rows themselves (summary.ts).
-await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_LAPSED, POSTERIOR], {
-  shape_inputs: { [RECORD_READ]: SUMMARY_INPUTS }, shape_descriptions: { [RECORD_READ]: SUMMARY_DESCRIPTION }, shape_answers: { [RECORD_READ]: SUMMARY_ANSWERS },
+// Only record_summary is declared, so a schema-filling caller (the walk's request producer) is offered counts of what
+// rows hold, by a shape that never answers a row; record_read stays undeclared (summary.ts).
+await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_LAPSED, POSTERIOR, RECORD_SUMMARY], {
+  shape_inputs: { [RECORD_SUMMARY]: SUMMARY_INPUTS }, shape_descriptions: { [RECORD_SUMMARY]: SUMMARY_DESCRIPTION }, shape_answers: { [RECORD_SUMMARY]: SUMMARY_ANSWERS },
 })
 await beat()
