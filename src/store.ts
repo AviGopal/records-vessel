@@ -25,6 +25,8 @@ export type Query = {
   head?: boolean
   // Only rows that hold this field (any value): after latest_by, so a thing whose latest row dropped the field shows nothing.
   has?: string
+  // Rows as written: no hold shown as its fact (factsOn). For a reader that writes rows back (pull-sync's gap upkeep).
+  stored?: boolean
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW, HOLD_FACT])
@@ -51,7 +53,15 @@ export const rows: Row[] = (await Bun.file(FILE).text())
 let seq = rows.length
 let wakers: Array<() => void> = []
 
+// A VIEW NEVER BECOMES DATA: a row carrying the mark records puts on a fact it showed in place of a hold (read_as_fact,
+// factsOn) is a read written back, and is refused, so a writer that read without `stored` fails loud instead of storing
+// the owner's reading as if it had observed it.
+export const READ_AS_FACT = "read_as_fact"
 export const write = (body: Record<string, unknown>, writer: string, role: string): { status: number; body: unknown } => {
+  const meta = typeof body.meta === "object" && body.meta !== null ? body.meta as Record<string, unknown> : {}
+  if (READ_AS_FACT in body || READ_AS_FACT in meta) {
+    return { status: 400, body: { failure: { status: 400, body: `${READ_AS_FACT}: a row records showed as read (a hold shown as its fact) is not written back; read with stored: true` } } }
+  }
   if (OWNER_SHAPES.has(String(body.shape))) {
     if (role !== OWNER) {
       return { status: 403, body: { failure: { status: 403, body: role } } }
@@ -161,7 +171,7 @@ const holdOf = (r: Row): { hold: boolean; reason: string } => {
   const m = (r.meta ?? {}) as { operator_hold?: unknown; operator_hold_reason?: unknown }
   return { hold: r.operator_hold === true || m.operator_hold === true, reason: String(r.operator_hold_reason ?? m.operator_hold_reason ?? "") }
 }
-type Fact = { prefix: string; fact: Record<string, unknown> }
+type Fact = { id: string; prefix: string; fact: Record<string, unknown> }
 const holdFacts = (): Fact[] => {
   const latest = new Map<string, Row>()
   for (const r of rows.filter((x) => x.shape === HOLD_FACT && x.role === OWNER).sort((a, b) => a.seq - b.seq)) {
@@ -169,13 +179,14 @@ const holdFacts = (): Fact[] => {
   }
   return [...latest.values()]
     .filter((r) => r.retired !== true && typeof r.fact === "object" && r.fact !== null && !Array.isArray(r.fact))
-    .map((r) => ({ prefix: String(r.reason_prefix), fact: r.fact as Record<string, unknown> }))
+    .map((r) => ({ id: r.id, prefix: String(r.reason_prefix), fact: r.fact as Record<string, unknown> }))
 }
 // The fact a gap row's hold reads as, or undefined when it holds nothing the owner reads as one.
-const factOf = (r: Row, facts: Fact[]): Record<string, unknown> | undefined => {
+const factRowOf = (r: Row, facts: Fact[]): Fact | undefined => {
   const h = holdOf(r)
-  return h.hold ? facts.find((f) => h.reason.startsWith(f.prefix))?.fact : undefined
+  return h.hold ? facts.find((f) => h.reason.startsWith(f.prefix)) : undefined
 }
+const factOf = (r: Row, facts: Fact[]): Record<string, unknown> | undefined => factRowOf(r, facts)?.fact
 
 const openGaps = (from: Row[]): Row[] => {
   const latest = new Map<string, Row>()
@@ -486,13 +497,16 @@ export const factsOn = (rs: Row[]): Row[] => {
   if (!rs.some((r) => r.shape === GAP)) return rs
   const facts = holdFacts()
   return rs.map((r) => {
-    const fact = r.shape === GAP ? factOf(r, facts) : undefined
-    if (fact === undefined) return r
+    const f = r.shape === GAP ? factRowOf(r, facts) : undefined
+    if (f === undefined) return r
+    // The fact goes where the hold was (the row's top level, its meta, or both), marked as records' reading (never
+    // written back: write() refuses the mark); the row's own fields win over the fact's.
+    const said = { ...f.fact, [READ_AS_FACT]: { hold_fact: f.id } }
+    const top = r.operator_hold === true
+    const m = typeof r.meta === "object" && r.meta !== null ? r.meta as Record<string, unknown> : undefined
     const { operator_hold: _h, operator_hold_reason: _hr, ...rest } = r
-    const meta = typeof r.meta === "object" && r.meta !== null
-      ? (({ operator_hold: _mh, operator_hold_reason: _mhr, ...m }) => m)(r.meta as Record<string, unknown>) : r.meta
-    // the row's own fields win over the fact's: the fact replaces the hold, never what the row says
-    return { ...fact, ...rest, ...(meta !== undefined ? { meta } : {}) } as Row
+    const meta = m === undefined ? undefined : (({ operator_hold: _mh, operator_hold_reason: _mhr, ...k }) => m.operator_hold === true ? { ...said, ...k } : k)(m)
+    return { ...(top ? said : {}), ...rest, ...(meta !== undefined ? { meta } : {}) } as Row
   })
 }
 export const projected = (rs: Row[]): Row[] => {
@@ -544,5 +558,5 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   // Any other read ({ids}, {shape}, {where}): the selections are answered whole (a reader by id wants their refs), but a
   // hold the owner reads as a fact is shown as its fact here too. A call's stored output (rootCalls, oneCall, walkCalls)
   // is the answer the call got, kept as it was: a records read in it was made through this function.
-  return withStanding(factsOn(read(q)))
+  return withStanding(q.stored === true ? read(q) : factsOn(read(q)))
 }

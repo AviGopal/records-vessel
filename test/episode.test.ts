@@ -528,8 +528,9 @@ describe("the walk's episode", () => {
     const all = await r.episodes()
     expect(all.roots.map((x) => x.root.id).sort()).toEqual([old.id, fresh2.id].sort())
     const shown = all.roots.flatMap((x) => x.rows).find((x) => x.id === old.id) as Record<string, any>
-    expect([shown?.localized, shown?.operator_hold, shown?.meta?.operator_hold, shown?.meta?.operator_hold_reason, shown?.meta?.filed_by])
-      .toEqual([false, undefined, undefined, undefined, "pull-sync failing-test generator"])
+    // the fact where the hold was (its meta), marked as records' reading
+    expect([shown?.meta?.localized, typeof shown?.meta?.read_as_fact?.hold_fact, shown?.operator_hold, shown?.meta?.operator_hold, shown?.meta?.operator_hold_reason, shown?.meta?.filed_by])
+      .toEqual([false, "string", undefined, undefined, undefined, "pull-sync failing-test generator"])
     // the stored row is unchanged: with the owner's row retired, the same read shows the hold as written
     await r.write(NODE_KEY, { ...READ_AS_FACT, retired: true }, owner)
     const stored = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap", ids: [old.id] })) as Record<string, any>[])[0]
@@ -544,13 +545,31 @@ describe("the walk's episode", () => {
     const reads = [{ ids: [held.id] }, { shape: "gap" }, { shape: "gap", where: { gap_id: "g-old" } }, { shape: "gap", latest_by: "gap_id", where: { status: "open" } }]
     for (const q of reads) {
       const got = ((await r.call(NODE_KEY, { type: "record_read", ...q })) as Record<string, any>[]).find((x) => x.id === held.id)
-      expect([JSON.stringify(q), got?.localized, got?.operator_hold, got?.meta?.operator_hold, got?.meta?.operator_hold_reason, got?.meta?.filed_by])
-        .toEqual([JSON.stringify(q), false, undefined, undefined, undefined, "pull-sync failing-test generator"])
+      expect([JSON.stringify(q), got?.meta?.localized, typeof got?.meta?.read_as_fact?.hold_fact, got?.operator_hold, got?.meta?.operator_hold, got?.meta?.operator_hold_reason, got?.meta?.filed_by])
+        .toEqual([JSON.stringify(q), false, "string", undefined, undefined, undefined, "pull-sync failing-test generator"])
     }
+    // read with stored: true, the row as written (its hold), for a reader that writes rows back
+    const stored = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap", stored: true })) as Record<string, any>[]).find((x) => x.id === held.id)
+    expect(stored?.meta).toEqual(GEN_HOLD)
     // a selection read by id is answered whole (its refs kept): only the episode answers trim them
     const sel = await r.select(held.id)
     const back = ((await r.call(NODE_KEY, { type: "record_read", ids: [sel.id] })) as Record<string, any>[])[0]
     expect(back?.input_refs).toEqual([held.id])
+  })
+
+  test("[MUST-FAIL] a view never becomes data: a gap read by default and written back is refused; read stored, it writes back with its hold", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, READ_AS_FACT, owner)
+    const held = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", meta: GEN_HOLD }, detector)
+    // pull-sync's carry_gap_repo shape: the latest row, its stored fields dropped, its meta carried, a field added
+    const back = (g: Record<string, any>) => { const { id: _i, seq: _s, t: _t, writer: _w, role: _r, input_refs: _ir, ...rest } = g; return { ...rest, repo: "some-vessel" } }
+    const shown = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap" })) as Record<string, any>[]).find((x) => x.id === held.id)!
+    const refused = (await r.write(NODE_KEY, back(shown), detector)) as Record<string, any>
+    expect([refused?.failure?.status, String(refused?.failure?.body ?? "").startsWith("read_as_fact")]).toEqual([400, true])
+    const asWritten = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap", stored: true })) as Record<string, any>[]).find((x) => x.id === held.id)!
+    const ok = (await r.write(NODE_KEY, back(asWritten), detector)) as Record<string, any>
+    expect([ok?.failure, ok?.repo, ok?.meta]).toEqual([undefined, "some-vessel", GEN_HOLD])
   })
 
   test("[MUST-FAIL] with no hold_fact row, every hold is honoured as today: the generator's hold is not a root", async () => {
@@ -577,10 +596,12 @@ describe("the walk's episode", () => {
   test("[MUST-FAIL] the fact replaces the hold, never what the row says: a field the row has keeps the row's value (qa k3)", async () => {
     const r = await fresh()
     await r.arm()
-    await r.write(NODE_KEY, { ...READ_AS_FACT, fact: { localized: false, status: "from-the-fact", summary: "from-the-fact" } }, owner)
+    await r.write(NODE_KEY, { ...READ_AS_FACT, fact: { localized: false, status: "from-the-fact", summary: "from-the-fact", filed_by: "from-the-fact" } }, owner)
     const old = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", summary: "the gap's own", meta: GEN_HOLD }, detector)
     const shown = (await r.episodes()).roots.flatMap((x) => x.rows).find((x) => x.id === old.id) as Record<string, any>
-    expect([shown?.status, shown?.summary, shown?.localized]).toEqual(["open", "the gap's own", false])
+    // the hold was in meta, so the fact is shown there; the row's own fields win, in meta and at the top
+    expect([shown?.status, shown?.summary, shown?.meta?.filed_by, shown?.meta?.localized])
+      .toEqual(["open", "the gap's own", "pull-sync failing-test generator", false])
   })
 
   test("[MUST-FAIL] only a reason that STARTS with the prefix reads as the fact: one naming it later stays held (qa k4)", async () => {
