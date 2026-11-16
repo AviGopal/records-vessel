@@ -78,26 +78,30 @@ export const indexOf = (seen: Row[]): Index => {
     const k = String(s.target)
     inputs.set(k, new Set([...(inputs.get(k) ?? []), ...[s.inputs ?? []].flat().map(shapeOf)]))
   }
-  // the selections whose own move failed (a failure the walk that made it wrote; a skip is not one), as gradesOf reads them
-  const failed = new Set(seen
-    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
-    .filter((r) => sels.get(String(r.selection_ref))?.writer === r.writer)
-    .map((r) => String(r.selection_ref)))
-  return { byId, sels, made, inputs, failed }
+  return { byId, sels, made, inputs, failed: failedOf(seen, sels) }
 }
+
+// The selections whose own move failed: a failure row the walk that made the selection wrote, whatever the status or
+// kind; a skip row is not one (it names a template that could not run, and cites whichever selection the walk was
+// making then). One reading, for the fold's index and its grades alike.
+const failedOf = (seen: Row[], sels: Map<string, Row>): Set<string> => new Set(seen
+  .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+  .filter((r) => sels.get(String(r.selection_ref))?.writer === r.writer)
+  .map((r) => String(r.selection_ref)))
 
 // A walk back may stop at a row it must not pass through (stopAt): the selection that produced that row is neither
 // credited nor walked past.
 // A RUN'S CREDIT IS EARNED BY A RUN THAT ENDED WELL (qa, agf_dagr3azgkhbr). A run selection whose move failed is a stop:
 // never credited, never walked past to the template it ran or the selection that minted it. A produce that names the
-// template itself in uses passes credit to its mint only when a treated run of that template, ended well, made a row
-// this produce also consumed: naming a plan shown beside the work, without having used a run of it, is no evidence the
+// template itself in uses passes credit to its mint only when a run of that template, ended well, made a row
+// this produce also consumed (any arm: a run of either arm walks on to its template through its own output anyway; a
+// selection's arm decides whether its own cell is credited, below): naming a plan shown beside the work, without having used a run of it, is no evidence the
 // plan worked. A run's output on another root passes credit as on this one (a plan reused elsewhere is the transfer).
 export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: Row) => boolean): Map<string, number> => {
   const { byId, sels, made, inputs, failed } = index
   const okRun = (sid: unknown): Row | undefined => {
     const s = sels.get(String(sid))
-    return s !== undefined && String(s.a ?? "").startsWith("run/") && String(s.arm) === TREATED && !failed.has(s.id) ? s : undefined
+    return s !== undefined && String(s.a ?? "").startsWith("run/") && !failed.has(s.id) ? s : undefined
   }
   const consumed = (sel: Row): string[] => {
     const a = String(sel.a ?? "")
@@ -143,13 +147,8 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const treated = (id: unknown): boolean => String(sels.get(String(id))?.arm) === TREATED
-  // A selection whose move failed (a failure row the walk that made it wrote, whatever the status or kind) produced
-  // nothing a grade can be crediting, so it is left out of every chain. A skip row is not such a failure: it names a
-  // template that could not run, and cites whichever selection the walk was making then, not a move of its own.
-  const failed = new Set(seen
-    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
-    .filter((r) => sels.get(String(r.selection_ref))?.writer === r.writer)
-    .map((r) => String(r.selection_ref)))
+  // A selection whose move failed produced nothing a grade can be crediting, so it is left out of every chain.
+  const failed = failedOf(seen, sels)
   // A grade (a person's verdict or a described outcome) judges one answer it saw (any described row that is not a grade,
   // so a due row is answer-like: grading it r 1 credits the steps that made it): the answer in its input_refs, or, when
   // it saw several, the one its evidence_refs names. It credits the composition that made that answer: the answer's
@@ -632,6 +631,18 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   let index: Index | undefined
   const idx = (): Index => (index ??= indexOf(seen))
   const failed = new Set(seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip").map((r) => String(r.selection_ref)))
+  // A PROMISE THE WALK COULD NOT KEEP BECAUSE THE REQUEST WAITED ON A PERSON counts for nothing (the USER, 11-16: "No
+  // lapse while waiting", carried to promises: the window measured the person's time, not the makers'). Broken, and at
+  // the selection that decided it a call on the root was waiting on a person (the walk's failure saying waits_for
+  // person, its selection's root this root) with no person row about the root since: refused person_wait, no debit.
+  const refsOf = (r: Row | undefined): string[] => [r?.input_refs].flat().filter((x) => x !== undefined).map(String)
+  const persons = seen.filter((p) => p.role === PERSON)
+  const waits = seen.filter((f) => f.shape === FAILURE && f.role === WALK && f.waits_for === "person")
+  const about = (p: Row, root: string): boolean => p.id === root || refsOf(p).includes(root) || refsOf(p).some((id) => refsOf(byId.get(id)).includes(root))
+  const waitingAt = (root: string, at: number): boolean => {
+    const w = waits.filter((f) => f.seq < at && String(byId.get(String(f.selection_ref))?.root) === root).sort((x, y) => x.seq - y.seq).at(-1)
+    return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq <= at && about(p, root))
+  }
   const out: Grade[] = []
   for (const a of seen.filter((r) => r.shape === "answer" && r.role === DESCRIBED && r.seq <= asOf)) {
     const act = a.next_act as { tool?: unknown; target?: unknown } | undefined
@@ -645,6 +656,10 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     if (decided === undefined || decided.seq > asOf) continue
     if (kept !== undefined && !acts.has(String(act.tool))) continue // a kept promise of a non-act earns nothing
     const r = kept !== undefined ? 1 : 0
+    if (r === 0 && waitingAt(root, decided.seq)) {
+      out.push({ id: a.id, ok: false, r, judged: s.id, key: `promise|${a.id}`, cells: new Set(), weights: new Map(), by: "promise", deadline: false, refused: "person_wait" })
+      continue
+    }
     const weights = new Map<string, number>()
     for (const [id, g] of reached(idx(), s.id, t)) {
       const x = byId.get(id)

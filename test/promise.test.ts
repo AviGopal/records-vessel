@@ -97,6 +97,29 @@ describe("a promise, settled by the walk's next selections", () => {
     expect(promiseGrades(b.rows, 1e9, 1e9).map((g) => g.r)).toEqual([0])
   })
 
+  // the USER (11-16): "No lapse while waiting", carried to promises: a window that fell while the request waited on a
+  // person measured the person's time, not the makers'.
+  const waitOn = (b: ReturnType<typeof build>) => {
+    const s = b.add(row("selection", "walk", { arm: "treated", cell: "call/git_land|x", root: b.ask.id, a: "call/git_land" }))
+    b.add(row("failure", "walk", { selection_ref: s.id, call_id: "cw", status: 409, waits_for: "person", input_refs: [s.id] }))
+  }
+  test("[MUST-FAIL] a promise broken while the request waited on a person counts for nothing: no debit", () => {
+    const b = build()
+    waitOn(b); b.other(); b.other()
+    expect(promiseGrades(b.rows, 1e9, 1e9)).toMatchObject([{ ok: false, r: 0, refused: "person_wait" }])
+    expect(b.post()).toMatchObject({ alpha: 1, beta: 1 })
+  })
+  test("[MUST-FAIL] the same promise broken outside a wait is still debited; a person row after the wait ends it", () => {
+    const b = build()
+    b.other(); b.other(); b.other()
+    expect(b.post()).toMatchObject({ alpha: 1, beta: 1.5 })
+    const c = build()
+    waitOn(c)
+    c.add(row("world_changed", "person", { what: "go on", input_refs: [c.ask.id] }))
+    c.other(); c.other() // the wait's own selection is the window's first of three
+    expect(c.post()).toMatchObject({ alpha: 1, beta: 1.5 })
+  })
+
   test("[MUST-FAIL] a kept promise of a tool the owner doesn't gate as an act earns nothing; a broken one is still broken", () => {
     const kept = build({ nextAct: { tool: "fs_read", target: "src/limits.ts" } })
     kept.call({ type: "fs_read", path: "src/limits.ts" })
