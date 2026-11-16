@@ -379,6 +379,9 @@ export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[
 // each checked against the closure's window and open gap rows through its own selection. So that is decided first, and
 // the chain is gathered only for a closure that landed (database: 22 closures, none landed, each scanning 15,079
 // selections and ~8.8 M refs, 4-5 s of every posterior). The same grades as gapClosuresScan, which the tests hold it to.
+// How many chains gapClosuresOf has gathered (one per landed closure), read by the tests to count the work, not time it.
+let chainsGathered = 0
+export const gapChainsGathered = (): number => chainsGathered
 const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
@@ -406,6 +409,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
         const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
         const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
         const landed = ended.some((e) => e.seq < c.seq && inChain(sels.get(String(started.get(String(e.call_id))?.selection_ref))))
+        if (landed) chainsGathered++
         const chain = landed ? [...sels.values()].filter(inChain) : []
         out.push({
           id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),

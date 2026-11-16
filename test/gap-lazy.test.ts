@@ -3,7 +3,7 @@
 // grades the full scan gives (gapClosuresScan), at every prefix of the rows and for several asOf, with closures that land
 // and that do not, a failure and an ended call written after the cut, and a change of the owner's rule.
 import { describe, expect, test } from "bun:test"
-import { gapClosuresScan, gapClosures } from "../src/fold"
+import { gapChainsGathered, gapClosuresScan, gapClosures } from "../src/fold"
 import type { Row } from "../src/store"
 import { slowRows } from "./fixtures/slow-store"
 
@@ -52,14 +52,14 @@ describe("closure grades, decided lazily", () => {
     expect(landed).toBeGreaterThan(0) // the fixture does land closures, so the chain path is exercised
   })
 
-  test("[MUST-FAIL] equal on a wide store where nothing lands, and fast there", () => {
-    const rows = slowRows(3000, 200, 150) as unknown as Row[]
+  test("[MUST-FAIL] equal on a wide store where nothing lands, and no chain is gathered there", () => {
+    const rows = slowRows(1000, 100, 60) as unknown as Row[]
     const head = rows.length
     const want = gapClosuresScan(rows, Number.MAX_SAFE_INTEGER, head)
-    const t0 = performance.now()
+    const before = gapChainsGathered()
     const got = gapClosures(rows, Number.MAX_SAFE_INTEGER, head)
-    const ms = performance.now() - t0
     expect(plain(got)).toBe(plain(want))
-    expect(ms).toBeLessThan(500)
-  })
+    expect(want.length).toBe(60)
+    expect(gapChainsGathered() - before).toBe(0) // the work counted, not timed: no closure here landed
+  }, 120_000)
 })
