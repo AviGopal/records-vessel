@@ -74,6 +74,15 @@ describe("a lapse while the request waited on a person", () => {
     const l2 = w2.lapse()
     expect(standingOf([...w2.base, ...wait2, word, ...l2], l2[1].id)).toBe("counted")
   })
+  test("[MUST-FAIL] only a wait on a person makes it a fact: a timeout or refusal on the root, or a wait written after the lapse, leaves the lapse counted", () => {
+    const w = world()
+    const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })
+    const timeout = row("failure", "walk", { call_id: "c1", selection_ref: s.id, status: 504, blame: "callee", input_refs: [s.id] })
+    const l = w.lapse()
+    expect(standingOf([...w.base, s, timeout, ...l], l[1].id)).toBe("counted")
+    const w2 = world(); const l2 = w2.lapse(); const later = w2.waiting()
+    expect(standingOf([...w2.base, ...l2, ...later], l2[1].id)).toBe("counted")
+  })
   test("[MUST-FAIL] another request's wait does not make this lapse a fact", () => {
     const w = world()
     const otherSel = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: "someone-else" })
