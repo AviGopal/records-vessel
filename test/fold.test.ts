@@ -226,10 +226,12 @@ describe("posterior fold", () => {
   test("[MUST-FAIL] the walk's grades are tallied: written and counted, answers and lapses apart, and why the rest were refused", () => {
     const dueSel = row("selection", "walk", { arm: "treated", cell: "due-cell", pool_refs: [ask.id] })
     const due = row("due", "described", { selection_ref: dueSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
+    // a person's grade: not the walk's own, not tallied; written before the lapse (one after it would overtake the lapse:
+    // the USER, "your later grade reopens it")
+    const person = verdict({})
     const graderSel = row("selection", "walk", { arm: "treated", cell: "judge", pool_refs: [ask.id, dueSel.id, due.id] })
     const lapse = row("outcome", "described", { r: 0, selection_ref: graderSel.id, input_refs: [ask.id, due.id, hop.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
     const sawHops = grade({ input_refs: [ask.id, answer.id, hop.id] }) // an answer grade that saw the walk's hops: refused
-    const person = verdict({}) // a person's grade: not the walk's own, not tallied
     const t = F.tally?.([...base, dueSel, due, graderSel, lapse, sawHops, person], seq, seq)
     expect(t).toEqual({ written: { answer: 1, lapse: 1, detector: 0 }, counted: { answer: 0, lapse: 1, detector: 0 }, refused: { unclean: 1 } })
   })

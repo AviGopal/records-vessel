@@ -159,6 +159,23 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   let index: Index | undefined
   const idx = (): Index => (index ??= indexOf(seen))
   const given = (r: Row): boolean => (entries ?? []).some((e) => typeof e === "object" && e !== null && "where" in e && matches(r, e))
+  // A LAPSE A PERSON OVERTOOK, OR ONE WRITTEN WHILE THE REQUEST WAITED ON A PERSON (the USER, 11-16 ~09:50Z: "Yes, your
+  // later grade reopens it"; "No lapse while waiting"). A person's grade (a person row with a numeric r) on the request,
+  // or on a row citing it, written after the lapse, overrides it: the request is open again, the person's latest mark
+  // decides, and the lapse debits no one. And a lapse written while a call made for the request waited on a person (the
+  // walk's failure saying waits_for person, with no person row on the request since) is a fact about the person's time,
+  // not the makers' work: it debits no one and closes nothing. A note with no r, a model's grade, or a mark on another
+  // request changes nothing.
+  const refsOf = (r: Row | undefined): string[] => [r?.input_refs].flat().filter((x) => x !== undefined).map(String)
+  const about = (p: Row, req: string): boolean => refsOf(p).includes(req) || refsOf(p).some((id) => refsOf(byId.get(id)).includes(req))
+  const persons = seen.filter((p) => p.role === PERSON)
+  const graded = persons.filter((p) => typeof p.r === "number" && Number.isFinite(p.r))
+  const waits = seen.filter((f) => f.shape === FAILURE && f.role === WALK && f.waits_for === "person")
+  const overtaken = (req: string, at: number): boolean => graded.some((p) => p.seq > at && about(p, req))
+  const waitingAt = (req: string, at: number): boolean => {
+    const w = waits.filter((f) => f.seq < at && String(sels.get(String(f.selection_ref))?.root) === req).sort((a, b) => a.seq - b.seq).at(-1)
+    return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq < at && (p.id === req || about(p, req)))
+  }
   const credit = (o: Row): Grade => {
     const saw = [o.input_refs].flat().map((id) => byId.get(String(id)))
     const answers = saw.filter((r) => r !== undefined && r.role === DESCRIBED && r.shape !== OUTCOME && gradable(r))
@@ -182,6 +199,8 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       : s === undefined || !treated(s.id) || (o.role !== PERSON && !treated(o.selection_ref)) ? "untreated"
       : o.role !== PERSON && !(clean || lapse) ? "unclean"
       : !timely ? "untimely"
+      : lapse && refsOf(j).some((req) => overtaken(req, o.seq)) ? "person_later"
+      : lapse && refsOf(j).some((req) => waitingAt(req, o.seq)) ? "person_wait"
       : undefined
     const ok = refused === undefined
     // What it credits: the selection that made the judged row, and every selection whose output that one consumed,
