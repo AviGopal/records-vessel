@@ -62,7 +62,7 @@ const shapeOf = (e: unknown): string => typeof e === "object" && e !== null ? St
 // ends.
 // The rows reached() walks, indexed once per fold, not once per grade: what is by id, which rows are selections, what
 // each selection produced, and each target's schema input shapes.
-export type Index = { byId: Map<string, Row>; sels: Map<string, Row>; made: Map<string, Row[]>; inputs: Map<string, Set<string>> }
+export type Index = { byId: Map<string, Row>; sels: Map<string, Row>; made: Map<string, Row[]>; inputs: Map<string, Set<string>>; failed: Set<string> }
 export const indexOf = (seen: Row[]): Index => {
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
@@ -78,13 +78,27 @@ export const indexOf = (seen: Row[]): Index => {
     const k = String(s.target)
     inputs.set(k, new Set([...(inputs.get(k) ?? []), ...[s.inputs ?? []].flat().map(shapeOf)]))
   }
-  return { byId, sels, made, inputs }
+  // the selections whose own move failed (a failure the walk that made it wrote; a skip is not one), as gradesOf reads them
+  const failed = new Set(seen
+    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+    .filter((r) => sels.get(String(r.selection_ref))?.writer === r.writer)
+    .map((r) => String(r.selection_ref)))
+  return { byId, sels, made, inputs, failed }
 }
 
 // A walk back may stop at a row it must not pass through (stopAt): the selection that produced that row is neither
 // credited nor walked past.
+// A RUN'S CREDIT IS EARNED BY A RUN THAT ENDED WELL (qa, agf_dagr3azgkhbr). A run selection whose move failed is a stop:
+// never credited, never walked past to the template it ran or the selection that minted it. A produce that names the
+// template itself in uses passes credit to its mint only when a treated run of that template, ended well, made a row
+// this produce also consumed: naming a plan shown beside the work, without having used a run of it, is no evidence the
+// plan worked. A run's output on another root passes credit as on this one (a plan reused elsewhere is the transfer).
 export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: Row) => boolean): Map<string, number> => {
-  const { byId, sels, made, inputs } = index
+  const { byId, sels, made, inputs, failed } = index
+  const okRun = (sid: unknown): Row | undefined => {
+    const s = sels.get(String(sid))
+    return s !== undefined && String(s.a ?? "").startsWith("run/") && String(s.arm) === TREATED && !failed.has(s.id) ? s : undefined
+  }
   const consumed = (sel: Row): string[] => {
     const a = String(sel.a ?? "")
     if (a.startsWith("call/")) return sel.from === undefined ? [] : [String(sel.from)]
@@ -94,7 +108,11 @@ export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: R
       const ins = inputs.get(String(p.shape)) ?? new Set<string>()
       const asInput = [...shown].filter((id) => ins.has(String(byId.get(id)?.shape)))
       const used = [p.uses ?? []].flat().map(String).filter((id) => shown.has(id))
-      return [...asInput, ...used]
+      const rows = [...asInput, ...used]
+      return rows.filter((id) => {
+        if (byId.get(id)?.shape !== ACTIVITY_TEMPLATE) return true
+        return rows.some((x) => okRun(byId.get(x)?.selection_ref)?.a === `run/${id}`)
+      })
     })
   }
   const out = new Map<string, number>()
@@ -109,6 +127,7 @@ export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: R
       for (const x of consumed(sel)) {
         if (stopAt !== undefined && byId.get(x) !== undefined && stopAt(byId.get(x)!)) continue
         const p = byId.get(x)?.selection_ref
+        if (typeof p === "string" && String(sels.get(p)?.a ?? "").startsWith("run/") && failed.has(p)) continue // a failed run: a stop
         if (typeof p === "string" && sels.has(p) && !seenSel.has(p) && (sels.get(p)?.seq ?? Infinity) < sel.seq) { seenSel.add(p); next.push(p) }
       }
     }
