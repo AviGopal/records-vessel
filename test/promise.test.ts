@@ -109,6 +109,13 @@ describe("a promise, settled by the walk's next selections", () => {
     expect(promiseGrades(b.rows, 1e9, 1e9)).toMatchObject([{ ok: false, r: 0, refused: "person_wait" }])
     expect(b.post()).toMatchObject({ alpha: 1, beta: 1 })
   })
+  test("[MUST-FAIL] a promise KEPT while the request waited on a person still credits (only a broken one is exempt)", () => {
+    const b = build()
+    waitOn(b)
+    b.call({ type: "fs_edit", path: "src/limits.ts" })
+    expect(promiseGrades(b.rows, 1e9, 1e9)).toMatchObject([{ ok: true, r: 1 }])
+    expect(b.post()).toMatchObject({ alpha: 1.5, beta: 1 })
+  })
   test("[MUST-FAIL] the same promise broken outside a wait is still debited; a person row after the wait ends it", () => {
     const b = build()
     b.other(); b.other(); b.other()
