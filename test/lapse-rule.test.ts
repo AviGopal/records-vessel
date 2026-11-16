@@ -89,6 +89,13 @@ describe("a deadline that passed ungraded lapses by rule", () => {
     const g = lapseOf([...w.base, aSel, answer, s, wait, mark], w.due)
     expect(g?.ok).toBe(false)
   })
+  test("[MUST-FAIL] waiting on a person when the deadline passed, and a person NOTE (no grade) is the first row after it: still no lapse", () => {
+    const w = world()
+    const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })
+    const wait = row("failure", "walk", { call_id: "c1", selection_ref: s.id, status: 409, waits_for: "person", input_refs: [s.id] }, 20_000)
+    const note = row("world_changed", "person", { what: "looking now", input_refs: [w.ask.id] }, 120_000) // the first row past it
+    expect(lapseOf([...w.base, s, wait, note], w.due)).toMatchObject({ ok: false, refused: "person_wait" })
+  })
   test("[MUST-FAIL] none while a call on the ask waits on a person; a later person grade overtakes it", () => {
     const w = world()
     const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })
