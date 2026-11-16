@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { type Who, authenticate, ownOrg } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
+import { costed } from "./cost"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
@@ -106,18 +107,19 @@ const HANDLERS = new Map<string, Handler>([
     const out = write(p.row, String(p.writer), String(p.role))
     return answer(out.status, out.body)
   }],
-  [RECORD_READ, async (p) => answer(200, serveRead(p))],
+  [RECORD_READ, async (p) => answer(200, costed(RECORD_READ, p, () => serveRead(p)))],
   [RECORD_WAIT, async (p) => answer(200, await wait(p.shapes, Number(p.after_seq), p.until === undefined ? undefined : Number(p.until)))],
   [RECORD_WAIT_EXACT, async (p) => answer(200, await waitExact(p.shapes, Number(p.after_seq), p.where))],
   [RECORD_LAPSED, async (p) => {
     if (p.deadline_shape === undefined || p.answer_shape === undefined) {
       return fail(400, RECORD_LAPSED)
     }
-    return answer(200, lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now(), Array.isArray(p.asks) ? p.asks.map(String) : undefined))
+    return answer(200, costed(RECORD_LAPSED, p, () => lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now(), Array.isArray(p.asks) ? p.asks.map(String) : undefined)))
   }],
   [POSTERIOR, async (p) => {
     const at = lastSeq()
-    return answer(200, { at_seq: at, posts: foldFrom(rows, p.cells ?? [], Number(p.as_of_seq), at), grades: tally(rows, Number(p.as_of_seq), at) })
+    return answer(200, costed(POSTERIOR, { as_of_seq: p.as_of_seq, cells: [p.cells ?? []].flat().length }, () =>
+      ({ at_seq: at, posts: foldFrom(rows, p.cells ?? [], Number(p.as_of_seq), at), grades: tally(rows, Number(p.as_of_seq), at) })))
   }],
 ])
 

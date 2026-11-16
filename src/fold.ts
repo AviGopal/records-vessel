@@ -472,6 +472,12 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // is per list (a test's own list is its own), holds a few (asOf, atSeq) pairs, and is the fold's own answer kept, not
 // state of its own: nothing is persisted or served, and what it returns is what the computation returns (V2 below).
 // Callers must not change what it returns (none does: they filter and map).
+// Each fold a cache miss ran (which fold, over how many rows, how long), since the last drain: a request's handler drains
+// it to say what its answer cost (index.ts). Nothing reads it to decide anything.
+export type Refold = { fold: string; rows: number; ms: number }
+let refolds: Refold[] = []
+export const drainRefolds = (): Refold[] => { const out = refolds; refolds = []; return out }
+
 const memo = (f: (all: Row[], asOf: number, atSeq: number) => Grade[]) => {
   const byList = new WeakMap<Row[], { n: number; at: Map<string, Grade[]> }>()
   return (all: Row[], asOf: number, atSeq: number): Grade[] => {
@@ -480,7 +486,9 @@ const memo = (f: (all: Row[], asOf: number, atSeq: number) => Grade[]) => {
     const k = `${asOf}|${atSeq}`
     const hit = c.at.get(k)
     if (hit !== undefined) return hit
+    const t0 = performance.now()
     const v = f(all, asOf, atSeq)
+    refolds.push({ fold: f.name, rows: all.length, ms: Math.round(performance.now() - t0) })
     if (c.at.size >= 8) c.at.delete(c.at.keys().next().value as string)
     c.at.set(k, v)
     return v
