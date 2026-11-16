@@ -113,6 +113,13 @@ describe("a promise, settled by the walk's next selections", () => {
     const b = build()
     b.other(); b.other(); b.other()
     expect(b.post()).toMatchObject({ alpha: 1, beta: 1.5 })
+    // a wait on ANOTHER request does not exempt this one
+    const d = build()
+    const elsewhere = d.add(row("world_changed", "person", { what: "another ask" }))
+    const s2 = d.add(row("selection", "walk", { arm: "treated", cell: "call/git_land|y", root: elsewhere.id, a: "call/git_land" }))
+    d.add(row("failure", "walk", { selection_ref: s2.id, call_id: "cx", status: 409, waits_for: "person", input_refs: [s2.id] }))
+    d.other(); d.other(); d.other()
+    expect(d.post()).toMatchObject({ alpha: 1, beta: 1.5 })
     const c = build()
     waitOn(c)
     c.add(row("world_changed", "person", { what: "go on", input_refs: [c.ask.id] }))

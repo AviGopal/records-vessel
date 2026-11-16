@@ -81,6 +81,22 @@ export const indexOf = (seen: Row[]): Index => {
   return { byId, sels, made, inputs, failed: failedOf(seen, sels) }
 }
 
+// WAITING ON A PERSON, one reading for every rule that asks it (a lapse, a derived lapse, a broken promise): at seq
+// `at`, the root's latest walk failure before it that says waits_for person (its selection's root this root) has had no
+// person row about the root since, up to and including `at` (a person row at that seq has spoken). About the root: the
+// row itself, a row citing it, or a row citing a row that cites it.
+const refsOfRow = (r: Row | undefined): string[] => [r?.input_refs].flat().filter((x) => x !== undefined).map(String)
+const personWait = (seen: Row[], byId: Map<string, Row>) => {
+  const persons = seen.filter((p) => p.role === PERSON)
+  const waits = seen.filter((f) => f.shape === FAILURE && f.role === WALK && f.waits_for === "person")
+  const about = (p: Row, root: string): boolean => p.id === root || refsOfRow(p).includes(root) || refsOfRow(p).some((id) => refsOfRow(byId.get(id)).includes(root))
+  const waitingAt = (root: string, at: number): boolean => {
+    const w = waits.filter((f) => f.seq < at && String(byId.get(String(f.selection_ref))?.root) === root).sort((x, y) => x.seq - y.seq).at(-1)
+    return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq <= at && about(p, root))
+  }
+  return { persons, about, waitingAt }
+}
+
 // The selections whose own move failed: a failure row the walk that made the selection wrote, whatever the status or
 // kind; a skip row is not one (it names a template that could not run, and cites whichever selection the walk was
 // making then). One reading, for the fold's index and its grades alike.
@@ -186,16 +202,10 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // walk's failure saying waits_for person, with no person row on the request since) is a fact about the person's time,
   // not the makers' work: it debits no one and closes nothing. A note with no r, a model's grade, or a mark on another
   // request changes nothing.
-  const refsOf = (r: Row | undefined): string[] => [r?.input_refs].flat().filter((x) => x !== undefined).map(String)
-  const about = (p: Row, req: string): boolean => refsOf(p).includes(req) || refsOf(p).some((id) => refsOf(byId.get(id)).includes(req))
-  const persons = seen.filter((p) => p.role === PERSON)
+  const refsOf = refsOfRow
+  const { persons, about, waitingAt } = personWait(seen, byId)
   const graded = persons.filter((p) => typeof p.r === "number" && Number.isFinite(p.r))
-  const waits = seen.filter((f) => f.shape === FAILURE && f.role === WALK && f.waits_for === "person")
   const overtaken = (req: string, at: number): boolean => graded.some((p) => p.seq > at && about(p, req))
-  const waitingAt = (req: string, at: number): boolean => {
-    const w = waits.filter((f) => f.seq < at && String(sels.get(String(f.selection_ref))?.root) === req).sort((a, b) => a.seq - b.seq).at(-1)
-    return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq < at && (p.id === req || about(p, req)))
-  }
   // A PROMISE IS EXEMPT FROM THE GRADER UNTIL ITS ASK'S FIRST DEADLINE (the USER, 11-16: "Exempt until deadline"; its
   // promise is graded by what happens next). A grade the walk's grader wrote of an answer that promises (promises(), the
   // owner's entry) before the first deadline of the ask it answers has come counts for nothing ("exempt"): a fact about
@@ -635,14 +645,7 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // lapse while waiting", carried to promises: the window measured the person's time, not the makers'). Broken, and at
   // the selection that decided it a call on the root was waiting on a person (the walk's failure saying waits_for
   // person, its selection's root this root) with no person row about the root since: refused person_wait, no debit.
-  const refsOf = (r: Row | undefined): string[] => [r?.input_refs].flat().filter((x) => x !== undefined).map(String)
-  const persons = seen.filter((p) => p.role === PERSON)
-  const waits = seen.filter((f) => f.shape === FAILURE && f.role === WALK && f.waits_for === "person")
-  const about = (p: Row, root: string): boolean => p.id === root || refsOf(p).includes(root) || refsOf(p).some((id) => refsOf(byId.get(id)).includes(root))
-  const waitingAt = (root: string, at: number): boolean => {
-    const w = waits.filter((f) => f.seq < at && String(byId.get(String(f.selection_ref))?.root) === root).sort((x, y) => x.seq - y.seq).at(-1)
-    return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq <= at && about(p, root))
-  }
+  const { waitingAt } = personWait(seen, byId)
   const out: Grade[] = []
   for (const a of seen.filter((r) => r.shape === "answer" && r.role === DESCRIBED && r.seq <= asOf)) {
     const act = a.next_act as { tool?: unknown; target?: unknown } | undefined
