@@ -53,6 +53,23 @@ describe("a deadline that passed ungraded lapses by rule", () => {
     const right = row("outcome", "person", { r: 1, input_refs: [answer.id] }, 20_000)
     expect(lapseOf([...w.base, aSel, answer, right, tick(120_000)], w.due)).toBeUndefined()
   })
+  test("[MUST-FAIL] a person's Right on a PROMISE does not stop it (the USER: Accurate, not done; Exempt until deadline)", () => {
+    const w = world()
+    const schema = row("shape_schema", "owner", { target: "outcome", context: ["answer"], evidence: [{ shape: "answer", deferred_by: "next_act" }] })
+    const aSel = row("selection", "walk", { arm: "treated", cell: "answer", root: w.ask.id })
+    const promise = row("answer", "described", { text: "not yet", next_act: { tool: "git_land" }, selection_ref: aSel.id, input_refs: [w.ask.id] }, 10_000)
+    const right = row("outcome", "person", { r: 1, input_refs: [promise.id] }, 20_000)
+    expect(lapseOf([...w.base, schema, aSel, promise, right, tick(120_000)], w.due)).toMatchObject({ ok: true })
+  })
+  test("[MUST-FAIL] a deadline whose own selection was not the walk's treated arm debits no one (untreated)", () => {
+    seq = 0
+    const ask = row("world_changed", "person", { what: "q" })
+    const sel = row("selection", "walk", { arm: "control", cell: "due-cell", root: ask.id })
+    const due = row("due", "described", { within_ms: 60_000, at: T0 + 60_000, selection_ref: sel.id, input_refs: [ask.id] })
+    const rows = [ask, sel, due, tick(120_000)]
+    expect(lapseOf(rows, due)).toMatchObject({ ok: false, refused: "untreated" })
+    expect(F.fold(rows, ["due-cell"], seq, seq)[0]).toMatchObject({ cell: "due-cell", alpha: 1, beta: 1 })
+  })
   test("[MUST-FAIL] none while a call on the ask waits on a person; a later person grade overtakes it", () => {
     const w = world()
     const s = row("selection", "walk", { arm: "treated", cell: "land", a: "call/git_land", root: w.ask.id })

@@ -246,21 +246,30 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // person's Right on a result, is a lapse: r 0 on that deadline, at the first row written after it, crediting the
   // deadline's chain as a written lapse does. No row is written; it is derived the same way on every read. The rules a
   // written lapse meets hold: a later person grade on the ask's rows overtakes it, and none while a call waits on a person.
-  const clockRow = seen.filter((r) => r.seq <= asOf).reduce<Row | undefined>((m, r) => (m === undefined || r.seq > m.seq ? r : m), undefined)
-  const now = clockRow === undefined ? NaN : Date.parse(String(clockRow.t))
+  // Each row's time is parsed once, and rows are in seq order with t stamped at write (rising with seq), so the first
+  // row at or after a deadline is found by binary search: the rule costs a pass over the rows, not a pass per ask (qa).
+  const timeline = seen.filter((r) => r.seq <= asOf).sort((a, b) => a.seq - b.seq)
+  const times = timeline.map((r) => Date.parse(String(r.t)))
+  const now = times.length > 0 ? times[times.length - 1] : NaN
+  const firstAtOrAfter = (at: number): Row | undefined => {
+    let lo = 0, hi = times.length
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (times[mid] >= at) hi = mid; else lo = mid + 1 }
+    return timeline[lo]
+  }
   const counted = new Set(real.filter((g) => g.ok).map((g) => g.judged))
-  const asksOf = (r: Row): string[] => refsOf(r).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
-  const reachedAsk = (ask: string): boolean => real.some((g) => g.ok && g.r === 1 && g.by === PERSON &&
-    asksOf(byId.get(g.judged) as Row).includes(ask) && !promises(seen, byId.get(g.judged)))
+  const asksOf = (r: Row | undefined): string[] => refsOf(r).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
+  // the asks a person's Right on a result reached (not on a promise: "Accurate, not done"), found once
+  const reachedAsks = new Set(real.filter((g) => g.ok && g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged)))
+    .flatMap((g) => asksOf(byId.get(g.judged))))
   const firstDue = new Map<string, Row>()
-  for (const r of seen.filter((x) => x.role === DESCRIBED && typeof x.within_ms === "number" && typeof x.at === "number").sort((a, b) => a.seq - b.seq)) {
+  for (const r of timeline) {
+    if (r.role !== DESCRIBED || typeof r.within_ms !== "number" || typeof r.at !== "number") continue
     for (const ask of asksOf(r)) if (!firstDue.has(ask)) firstDue.set(ask, r)
   }
-  const after = [...seen].filter((r) => r.seq <= asOf).sort((a, b) => a.seq - b.seq)
   const derived: Grade[] = []
   for (const [ask, due] of firstDue) {
-    if (!(Number(due.at) < now) || counted.has(due.id) || reachedAsk(ask)) continue
-    const at = after.find((r) => Date.parse(String(r.t)) >= Number(due.at))
+    if (!(Number(due.at) < now) || counted.has(due.id) || reachedAsks.has(ask)) continue
+    const at = firstAtOrAfter(Number(due.at))
     if (at === undefined) continue
     const s = sels.get(String(due.selection_ref))
     const refused = s === undefined || !treated(s.id) ? "untreated"
