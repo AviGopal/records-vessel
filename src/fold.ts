@@ -382,6 +382,8 @@ export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[
 // How many chains gapClosuresOf has gathered (one per landed closure), read by the tests to count the work, not time it.
 let chainsGathered = 0
 export const gapChainsGathered = (): number => chainsGathered
+// The scan over every treated selection a landed closure's chain costs: counted where it is made.
+const gather = (sels: Row[], inChain: (s: Row | undefined) => s is Row): Row[] => { chainsGathered++; return sels.filter(inChain) }
 const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
@@ -409,8 +411,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
         const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
         const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
         const landed = ended.some((e) => e.seq < c.seq && inChain(sels.get(String(started.get(String(e.call_id))?.selection_ref))))
-        if (landed) chainsGathered++
-        const chain = landed ? [...sels.values()].filter(inChain) : []
+        const chain = landed ? gather([...sels.values()], inChain) : []
         out.push({
           id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
           weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),

@@ -38,18 +38,23 @@ describe("closure grades, decided lazily", () => {
   test("[MUST-FAIL] equal to the full scan at every prefix and several asOf, landing and not, rows after the cut", () => {
     const all = landing()
     let landed = 0
+    const before = gapChainsGathered()
     for (let n = 1; n <= all.length; n++) {
       const rows = all.slice(0, n)
       const head = rows[rows.length - 1]!.seq
       for (const asOf of [0, Math.floor(head / 2), head, Number.MAX_SAFE_INTEGER]) {
         for (const atSeq of [head, Math.max(1, head - 3)]) {
           const want = gapClosuresScan(rows, asOf, atSeq)
+          const at = gapChainsGathered()
           expect([n, asOf, atSeq, plain(gapClosures(rows, asOf, atSeq))]).toEqual([n, asOf, atSeq, plain(want)])
+          // one chain gathered per landed closure and none for any other (a repeated (asOf, atSeq) on one list is kept)
+          if (gapChainsGathered() !== at) expect(gapChainsGathered() - at).toBe(want.filter((g) => g.ok).length)
           landed += want.filter((g) => g.ok).length
         }
       }
     }
     expect(landed).toBeGreaterThan(0) // the fixture does land closures, so the chain path is exercised
+    expect(gapChainsGathered() - before).toBeGreaterThan(0)
   })
 
   test("[MUST-FAIL] equal on a wide store where nothing lands, and no chain is gathered there", () => {
