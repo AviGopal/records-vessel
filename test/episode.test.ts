@@ -734,6 +734,34 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id) // a person's closes it
   })
 
+  test("[MUST-FAIL] a person's Right on an answer that promises the next act keeps the request open; on one that claims the result it closes (the USER: Accurate, not done)", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, { shape: "shape_schema", target: "outcome", inputs: ["world_changed"], context: ["answer"],
+      evidence: [{ shape: "answer", deferred_by: "next_act" }] }, owner)
+    const a = (await r.ask("land it")) as { id: string }
+    const sel = await r.select(a.id)
+    const promise = await r.write(NODE_KEY, { shape: "answer", text: "not landed yet", next_act: { tool: "git_land", target: "x" }, selection_ref: sel.id, input_refs: [a.id] }, desc)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [promise.id] })
+    const roots = async () => (await r.episodes()).roots.map((x: any) => x.root.id)
+    expect(await roots()).toContain(a.id) // accurate, not done: still open
+    const result = await r.write(NODE_KEY, { shape: "answer", text: "landed", selection_ref: sel.id, input_refs: [a.id] }, desc)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [result.id] })
+    expect(await roots()).not.toContain(a.id) // the result, judged right: closed as reached
+  })
+
+  test("[MUST-FAIL] which answers promise is the owner's: with no evidence entry for answers (one for another shape), a Right on an answer carrying next_act closes as before", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, { shape: "shape_schema", target: "outcome", inputs: ["world_changed"], context: ["answer"],
+      evidence: [{ shape: "due", deferred_by: "next_act" }] }, owner)
+    const a = (await r.ask("land it")) as { id: string }
+    const sel = await r.select(a.id)
+    const promise = await r.write(NODE_KEY, { shape: "answer", text: "not landed yet", next_act: { tool: "git_land", target: "x" }, selection_ref: sel.id, input_refs: [a.id] }, desc)
+    await r.write(PERSON_KEY, { shape: "outcome", r: 1, input_refs: [promise.id] })
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id)
+  })
+
   test("[MUST-FAIL] an ask under a key identity has not marked (unclassified) is stored but is no request: no root, until identity marks it", async () => {
     const r = await fresh()
     await r.arm()

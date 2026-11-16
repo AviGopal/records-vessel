@@ -241,6 +241,20 @@ export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
 
 // The grades that stand: those that count, and of each writer's grades of one answer only the latest (a repeat
 // replaces, never adds), as the fold below folds them. A person who grades an answer r 1 and then r 0 has not closed it.
+// AN ANSWER THAT PROMISES THE NEXT ACT IS NOT THE RESULT (the USER, 11-16 ~10:25Z: "Accurate, not done"). A person's
+// Right on it says the answer is true, not that the work is done: the request stays open, and the promise is graded by
+// what happens. Which answers promise is the owner's to say, in its newest outcome schema's evidence: an entry
+// {shape, deferred_by: f} marks a row of that shape carrying f as a promise (the walk reads the same entry: such an
+// answer waits for its ask's first deadline). With no such entry, no answer promises, as before.
+export const promises = (all: Row[], r: Row | undefined): boolean => {
+  if (r === undefined) return false
+  const schema = all.filter((x) => x.shape === SHAPE_SCHEMA && x.role === OWNER && String(x.target) === OUTCOME && !x.variant)
+    .sort((a, b) => a.seq - b.seq).at(-1)
+  return [schema?.evidence ?? []].flat().some((e) => typeof e === "object" && e !== null &&
+    (e as { shape?: unknown }).shape === r.shape && typeof (e as { deferred_by?: unknown }).deferred_by === "string" &&
+    r[(e as { deferred_by: string }).deferred_by] !== undefined && r[(e as { deferred_by: string }).deferred_by] !== null)
+}
+
 export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] =>
   [...new Map(grades(all, asOf, atSeq).filter((k) => k.ok).map((k) => [k.key, k])).values()]
 

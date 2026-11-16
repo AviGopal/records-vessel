@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
-import { blames, grades, standing } from "./fold"
+import { blames, grades, promises, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
@@ -140,7 +140,8 @@ const exogenous = (from: Row[]): Row[] =>
 
 // A request is closed when a grade that stands says how it ended (fold.ts standing, the fold's own predicate: of a
 // writer's grades of one answer only the latest stands): DONE by a
-// person's verdict at r 1 on an answer to it; FAILED by a lapse (a counted r 0 on its deadline row). A described
+// person's verdict at r 1 on an answer to it that claims the result (not one that promises the next act: fold.ts
+// promises); FAILED by a lapse (a counted r 0 on its deadline row). A described
 // outcome at r 1 is the walk grading its own answer and does not close a request: an independent grade (by information,
 // not only by a person) would, and is not built yet. "Answers it" is provenance: the judged row cites the request in
 // its input_refs.
@@ -148,7 +149,7 @@ const closed = (): Set<string> => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const out = new Set<string>()
   for (const g of standing(rows, seq, seq)) {
-    const ends = (g.r === 1 && g.by === PERSON) || (g.r === 0 && g.deadline)
+    const ends = (g.r === 1 && g.by === PERSON && !promises(rows, byId.get(g.judged))) || (g.r === 0 && g.deadline)
     if (ends) for (const id of [byId.get(g.judged)?.input_refs].flat()) out.add(String(id))
   }
   return out
