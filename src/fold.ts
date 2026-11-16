@@ -83,13 +83,13 @@ export const indexOf = (seen: Row[]): Index => {
 
 // WAITING ON A PERSON, one reading for every rule that asks it (a lapse, a derived lapse, a broken promise): at seq
 // `at`, the root's latest walk failure before it that says waits_for person (its selection's root this root) has had no
-// person row about the root since, up to and including `at` (a person row at that seq has spoken). About the root: the
-// row itself, a row citing it, or a row citing a row that cites it.
+// person row about the root since, up to and including `at` (a person row at that seq has spoken). About the root: a row
+// citing it, or a row citing a row that cites it (the root itself always comes before its selections, waits and grades).
 const refsOfRow = (r: Row | undefined): string[] => [r?.input_refs].flat().filter((x) => x !== undefined).map(String)
 const personWait = (seen: Row[], byId: Map<string, Row>) => {
   const persons = seen.filter((p) => p.role === PERSON)
   const waits = seen.filter((f) => f.shape === FAILURE && f.role === WALK && f.waits_for === "person")
-  const about = (p: Row, root: string): boolean => p.id === root || refsOfRow(p).includes(root) || refsOfRow(p).some((id) => refsOfRow(byId.get(id)).includes(root))
+  const about = (p: Row, root: string): boolean => refsOfRow(p).includes(root) || refsOfRow(p).some((id) => refsOfRow(byId.get(id)).includes(root))
   const waitingAt = (root: string, at: number): boolean => {
     const w = waits.filter((f) => f.seq < at && String(byId.get(String(f.selection_ref))?.root) === root).sort((x, y) => x.seq - y.seq).at(-1)
     return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq <= at && about(p, root))
