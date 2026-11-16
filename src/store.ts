@@ -4,7 +4,7 @@ import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
 import { blames, grades, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -27,7 +27,7 @@ export type Query = {
   has?: string
 }
 
-const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW])
+const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW, HOLD_FACT])
 // Whose rows are asks and what the walk answers (the roots, what wakes a wait, whose deadlines lapse): a person's, the
 // owner's, and an operator's. Only a person's are verdicts (closed, earned, below).
 const EXO_ROLES = new Set([PERSON, OWNER, OPERATOR])
@@ -152,27 +152,38 @@ const closed = (): Set<string> => {
 // A gap a detector found is work too, though no one asked: while the latest detector row for its gap_id says open (and
 // no hold is on it), that row is a root, worked as a request is. Only a detector closes it (a later row of the same gap_id that is not open: its
 // check passed), never a grade or anything the walk writes, so the gap stays work until the check says it is fixed.
-// THE FAILING-TEST GENERATOR'S HOLD IS A FACT (the USER: "Read as facts"; 11-15 "fact + debit, NO hold"). pull-sync's
-// generator held a gap it could not localize (operator_hold, its reason "needs_localization: …"): that hold says only
-// that no source frame names the edit site, so it is read as the fact "not localized" and holds nothing. The gap is
-// work, and a producer is shown localized false in place of the hold (projected). No stored row is rewritten. Any other
-// hold (a person's, any later kind) is honoured as before.
-const LOCALIZATION_HOLD = "needs_localization"
+// A HOLD THE OWNER READS AS A FACT (hold_fact rows; the USER: "Read as facts"; 11-15 "fact + debit, NO hold"). A hold
+// whose reason starts a hold_fact row's reason_prefix says only what its fact says (pull-sync's failing-test generator:
+// no source frame names the edit site, which the walk can find with tools it has): the gap is work, and a producer is
+// shown the fact in place of the hold (projected). No stored row is rewritten. Any other hold (a person's, any later
+// kind) is honoured as before, and with no such row every hold is.
 const holdOf = (r: Row): { hold: boolean; reason: string } => {
   const m = (r.meta ?? {}) as { operator_hold?: unknown; operator_hold_reason?: unknown }
   return { hold: r.operator_hold === true || m.operator_hold === true, reason: String(r.operator_hold_reason ?? m.operator_hold_reason ?? "") }
 }
-export const localizationOnly = (r: Row): boolean => {
+type Fact = { prefix: string; fact: Record<string, unknown> }
+const holdFacts = (): Fact[] => {
+  const latest = new Map<string, Row>()
+  for (const r of rows.filter((x) => x.shape === HOLD_FACT && x.role === OWNER).sort((a, b) => a.seq - b.seq)) {
+    if (typeof r.reason_prefix === "string" && r.reason_prefix !== "") latest.set(r.reason_prefix, r)
+  }
+  return [...latest.values()]
+    .filter((r) => r.retired !== true && typeof r.fact === "object" && r.fact !== null && !Array.isArray(r.fact))
+    .map((r) => ({ prefix: String(r.reason_prefix), fact: r.fact as Record<string, unknown> }))
+}
+// The fact a gap row's hold reads as, or undefined when it holds nothing the owner reads as one.
+const factOf = (r: Row, facts: Fact[]): Record<string, unknown> | undefined => {
   const h = holdOf(r)
-  return h.hold && h.reason.startsWith(LOCALIZATION_HOLD)
+  return h.hold ? facts.find((f) => h.reason.startsWith(f.prefix))?.fact : undefined
 }
 
 const openGaps = (from: Row[]): Row[] => {
   const latest = new Map<string, Row>()
   for (const r of from.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined)) latest.set(String(r.gap_id), r)
-  // A gap held by a person (operator_hold on its latest row, kept in its meta by the detector; not the generator's fact, above) is no one's work until
+  // A gap held by a person (operator_hold on its latest row, kept in its meta by the detector; not the owner's fact, above) is no one's work until
   // the hold lifts: it is not a root.
-  const held = (r: Row): boolean => holdOf(r).hold && !localizationOnly(r)
+  const facts = holdFacts()
+  const held = (r: Row): boolean => holdOf(r).hold && factOf(r, facts) === undefined
   // A gap a person judged to have a wrong test (check_runnable false on its latest row, written by the detector's
   // release from that person's r 0) is no one's work here either: a change must not edit the check that verifies it, so
   // nothing the walk could do on it is allowed, not a clone, an edit, a commit or a landing in a clone made before. The
@@ -470,12 +481,15 @@ export const oneCall = (callId: string): Call[] => {
 // stored rows are unchanged, and every reader inside records (the fold, closing, templates) reads them whole.
 export const projected = (rs: Row[]): Row[] => {
   const refusedSel = new Set(rs.filter((r) => r.shape === FAILURE && r.refused === "schema").map((r) => String(r.selection_ref)))
+  const facts = rs.some((r) => r.shape === GAP) ? holdFacts() : []
   return rs.map((r) => {
-    if (r.shape === GAP && localizationOnly(r)) {
+    const fact = r.shape === GAP ? factOf(r, facts) : undefined
+    if (fact !== undefined) {
       const { operator_hold: _h, operator_hold_reason: _hr, ...rest } = r
       const meta = typeof r.meta === "object" && r.meta !== null
         ? (({ operator_hold: _mh, operator_hold_reason: _mhr, ...m }) => m)(r.meta as Record<string, unknown>) : r.meta
-      return { ...rest, ...(meta !== undefined ? { meta } : {}), localized: false } as Row
+      // the row's own fields win over the fact's: the fact replaces the hold, never what the row says
+      return { ...fact, ...rest, ...(meta !== undefined ? { meta } : {}) } as Row
     }
     if (r.shape !== SELECTION || refusedSel.has(r.id)) return r
     const { pool_refs, input_refs, ...rest } = r

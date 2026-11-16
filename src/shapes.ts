@@ -39,6 +39,10 @@ export const RHYTHM = "rhythm"
 export const FAILURE_RULE = "failure_rule"
 // The owner's mark that a span of the store was an outage: failures of the classes it names, inside it, debit no one.
 export const INFRA_WINDOW = "infra_window"
+// The owner's reading of a hold as a fact: {reason_prefix, fact, retired}, the latest per reason_prefix its state. A gap
+// whose latest row holds (operator_hold) with a reason starting reason_prefix is not held: it is work, and a producer is
+// shown fact's fields in place of the hold (the USER: "Read as facts"). Configuration, never work.
+export const HOLD_FACT = "hold_fact"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.

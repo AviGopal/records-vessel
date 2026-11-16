@@ -515,11 +515,15 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([lifted.id])
   })
 
-  test("[MUST-FAIL] the failing-test generator's hold is a fact (the USER: \"Read as facts\"): the gap is work, shown as localized false; the stored row is unchanged", async () => {
+  // The owner's hold_fact row (the USER: "Read as facts"): a hold whose reason starts its reason_prefix is that fact.
+  const READ_AS_FACT = { shape: "hold_fact", reason_prefix: "needs_localization", fact: { localized: false } }
+  const GEN_HOLD = { operator_hold: true, operator_hold_reason: "needs_localization: no source frame", filed_by: "pull-sync failing-test generator" }
+
+  test("[MUST-FAIL] with the owner's hold_fact row, a hold of its reason is that fact: the gap is work, shown with the fact; the stored row is unchanged", async () => {
     const r = await fresh()
     await r.arm()
-    const meta = { operator_hold: true, operator_hold_reason: "needs_localization: no source frame", filed_by: "pull-sync failing-test generator" }
-    const old = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", waits_for: "person", meta }, detector)
+    await r.write(NODE_KEY, READ_AS_FACT, owner)
+    const old = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", waits_for: "person", meta: GEN_HOLD }, detector)
     const fresh2 = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-new", status: "open", waits_for: "person", meta: { localized: false } }, detector)
     const all = await r.episodes()
     expect(all.roots.map((x) => x.root.id).sort()).toEqual([old.id, fresh2.id].sort())
@@ -527,17 +531,37 @@ describe("the walk's episode", () => {
     expect([shown?.localized, shown?.operator_hold, shown?.meta?.operator_hold, shown?.meta?.operator_hold_reason, shown?.meta?.filed_by])
       .toEqual([false, undefined, undefined, undefined, "pull-sync failing-test generator"])
     const stored = ((await r.call(NODE_KEY, { type: "record_read", shape: "gap", ids: [old.id] })) as Record<string, any>[])[0]
-    expect(stored?.meta).toEqual(meta)
+    expect(stored?.meta).toEqual(GEN_HOLD)
   })
 
-  test("[MUST-FAIL] a hold for any other reason is honoured as before: not a root, and shown as written", async () => {
+  test("[MUST-FAIL] with no hold_fact row, every hold is honoured as today: the generator's hold is not a root", async () => {
     const r = await fresh()
     const arm = await r.arm()
-    const meta = { operator_hold: true, operator_hold_reason: "a person is reviewing this gap" }
-    const held = await r.write(NODE_KEY, { shape: "gap", gap_id: "g-p", status: "open", meta }, detector)
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", meta: GEN_HOLD }, detector)
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
-    const { projected } = await import("../src/store")
-    expect(projected([held as any])[0]).toEqual(held)
+  })
+
+  test("[MUST-FAIL] a hold for another reason stays held with the row; a hold_fact row written by anyone but the owner is refused and reads nothing", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    await r.write(NODE_KEY, READ_AS_FACT, owner)
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g-p", status: "open", meta: { operator_hold: true, operator_hold_reason: "a person is reviewing this gap" } }, detector)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
+    const r2 = await fresh()
+    const arm2 = await r2.arm()
+    const forged = await r2.write(NODE_KEY, READ_AS_FACT, walk)
+    expect(forged.id).toBeUndefined()
+    await r2.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", meta: GEN_HOLD }, detector)
+    expect((await r2.episodes()).roots.map((x) => x.root.id)).toEqual([arm2.id])
+  })
+
+  test("a retired hold_fact row reads nothing: the hold is honoured again", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    await r.write(NODE_KEY, READ_AS_FACT, owner)
+    await r.write(NODE_KEY, { ...READ_AS_FACT, retired: true }, owner)
+    await r.write(NODE_KEY, { shape: "gap", gap_id: "g-old", status: "open", meta: GEN_HOLD }, detector)
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([arm.id])
   })
 
   test("[MUST-FAIL] a gap a person judged to have a wrong test (check_runnable false) is no one's work: not a root, until a later row clears it", async () => {
