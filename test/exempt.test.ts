@@ -48,6 +48,29 @@ describe("a promise is exempt from the grader until its first deadline", () => {
     const g = F.grades([schema, ask, first, later, aSel, answer, gSel, grade], seq, seq).find((x) => x.id === grade.id)
     expect(g?.ok ? "counted" : g?.refused).toBe("counted")
   })
+  // an answer, its asks, deadlines and the grade, built as the world above, from parts
+  const judge = (parts: (ask: Row, ask2: Row) => Row[]) => {
+    seq = 0
+    const schema = row("shape_schema", "owner", { target: "outcome", context: ["answer", "due"], evidence: [{ shape: "answer", deferred_by: "next_act" }] })
+    const ask = row("world_changed", "person", { what: "q" })
+    const ask2 = row("world_changed", "person", { what: "q2" })
+    const dues = parts(ask, ask2)
+    const aSel = row("selection", "walk", { arm: "treated", cell: "answer", root: ask.id })
+    const answer = row("answer", "described", { text: "t", next_act: { tool: "git_land" }, selection_ref: aSel.id, input_refs: [ask.id, ask2.id] })
+    const gSel = row("selection", "walk", { arm: "treated", cell: "judge", root: ask.id })
+    const grade = row("outcome", "described", { r: 0, selection_ref: gSel.id, input_refs: [ask.id, answer.id], evidence_refs: [answer.id] })
+    const g = F.grades([schema, ask, ask2, ...dues, aSel, answer, gSel, grade], seq, seq).find((x) => x.id === grade.id)
+    return g?.ok ? "counted" : g?.refused
+  }
+  test("[MUST-FAIL] an answer to two asks is exempt only while EVERY ask's first deadline is ahead", () => {
+    expect(judge((a, b) => [row("due", "described", { within_ms: 1000, at: T0 + 1000, input_refs: [a.id] }),
+      row("due", "described", { within_ms: 86_400_000, at: T0 + 86_400_000, input_refs: [b.id] })])).toBe("counted")
+    expect(judge((a, b) => [row("due", "described", { within_ms: 86_400_000, at: T0 + 86_400_000, input_refs: [a.id] }),
+      row("due", "described", { within_ms: 86_400_000, at: T0 + 86_400_000, input_refs: [b.id] })])).toBe("exempt")
+  })
+  test("[MUST-FAIL] only the producer's deadline row (described) sets the deadline; one anyone else wrote does not", () => {
+    expect(judge((a, b) => [row("due", "person", { within_ms: 1000, at: T0 + 1000, input_refs: [a.id, b.id] })])).toBe("exempt")
+  })
   test("[MUST-FAIL] with no deadline yet, it is exempt (no deadline has come)", () => {
     expect(world({ dueAt: null })).toBe("exempt")
   })
