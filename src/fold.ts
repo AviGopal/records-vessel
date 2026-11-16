@@ -12,6 +12,8 @@ const GRADERS = new Set([DESCRIBED, PERSON])
 // by: the grader's role (person, or described for the walk's own outcome); deadline: the judged row is a deadline, so
 // a counted grade of it at r 0 is a lapse.
 // refused: why a grade does not count, when it does not (the first reason that applies).
+// The role a derived lapse is said by: no writer wrote it (records' rule did).
+export const LAPSE = "lapse"
 export type Grade = { id: string; ok: boolean; r: number; judged: string; key: string; cells: Set<string>; weights: Map<string, number>; by: string; deadline: boolean; refused?: string }
 
 // What the owner's credits row for target "selection" says about how credit travels: the weight each kind of
@@ -231,11 +233,52 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     }
     return { id: o.id, ok, r, judged: String(judged[0]?.id), key: [o.writer, judged[0]?.id].join("|"), cells: new Set(weights.keys()), weights, by: String(o.role), deadline, ...(refused ? { refused } : {}) }
   }
-  return seen
+  const real = seen
     .filter((r) => r.shape === OUTCOME)
     .filter((r) => GRADERS.has(r.role))
     .filter((r) => r.seq <= asOf)
     .map(credit)
+  // A DEADLINE THAT PASSED UNGRADED IS A LAPSE BY RULE (the USER, 11-16: "Yes, a fixed rule records it"). A lapse was
+  // a grade the walk's grader had to choose to write, so a busy root lost it in every draw and never closed (489: its
+  // first deadline passed at 11:58 and stayed ungraded). Now, as lapsed() reads it, each ask's FIRST deadline row (a
+  // producer's, with within_ms and the at records stamped), once its at has passed by the store's own clock (the time
+  // of the newest row at asOf, so a replay answers the same), with no counted grade of it and the ask not closed by a
+  // person's Right on a result, is a lapse: r 0 on that deadline, at the first row written after it, crediting the
+  // deadline's chain as a written lapse does. No row is written; it is derived the same way on every read. The rules a
+  // written lapse meets hold: a later person grade on the ask's rows overtakes it, and none while a call waits on a person.
+  const clockRow = seen.filter((r) => r.seq <= asOf).reduce<Row | undefined>((m, r) => (m === undefined || r.seq > m.seq ? r : m), undefined)
+  const now = clockRow === undefined ? NaN : Date.parse(String(clockRow.t))
+  const counted = new Set(real.filter((g) => g.ok).map((g) => g.judged))
+  const asksOf = (r: Row): string[] => refsOf(r).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
+  const reachedAsk = (ask: string): boolean => real.some((g) => g.ok && g.r === 1 && g.by === PERSON &&
+    asksOf(byId.get(g.judged) as Row).includes(ask) && !promises(seen, byId.get(g.judged)))
+  const firstDue = new Map<string, Row>()
+  for (const r of seen.filter((x) => x.role === DESCRIBED && typeof x.within_ms === "number" && typeof x.at === "number").sort((a, b) => a.seq - b.seq)) {
+    for (const ask of asksOf(r)) if (!firstDue.has(ask)) firstDue.set(ask, r)
+  }
+  const after = [...seen].filter((r) => r.seq <= asOf).sort((a, b) => a.seq - b.seq)
+  const derived: Grade[] = []
+  for (const [ask, due] of firstDue) {
+    if (!(Number(due.at) < now) || counted.has(due.id) || reachedAsk(ask)) continue
+    const at = after.find((r) => Date.parse(String(r.t)) >= Number(due.at))
+    if (at === undefined) continue
+    const s = sels.get(String(due.selection_ref))
+    const refused = s === undefined || !treated(s.id) ? "untreated"
+      : overtaken(ask, at.seq) ? "person_later" : waitingAt(ask, at.seq) ? "person_wait" : undefined
+    const weights = new Map<string, number>()
+    if (refused === undefined && s !== undefined) {
+      for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel)) {
+        if (!treated(id) || failed.has(id)) continue
+        const c = String(sels.get(id)?.cell)
+        weights.set(c, Math.max(weights.get(c) ?? 0, g))
+      }
+    }
+    if (!derived.some((g) => g.judged === due.id)) {
+      derived.push({ id: `lapse:${due.id}`, ok: refused === undefined, r: 0, judged: due.id, key: `lapse|${due.id}`, cells: new Set(weights.keys()),
+        weights, by: LAPSE, deadline: true, ...(refused ? { refused } : {}) })
+    }
+  }
+  return [...real, ...derived]
 }
 
 // How the walk's own grades (described outcomes) fared, over every one written: how many were written and how many

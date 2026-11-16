@@ -148,7 +148,9 @@ describe("posterior fold", () => {
     const heavier = travel({ w_lapse: 3 })
     expect(fold([...base, ...rows, heavier, late], ["due-cell"], seq, seq)[0]).toEqual({ cell: "due-cell", alpha: 1, beta: 4 })
     expect(at(lapse({ t: "2026-11-10T09:59:00Z" }), "due-cell")).toEqual({ cell: "due-cell", ...still })
-    expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", ...still })
+    // a grader's r 1 on the deadline counts for nothing (refused), and the deadline has passed by the store's clock: the
+    // rule records the lapse (the USER, 11-16: "Yes, a fixed rule records it"); before, nothing was recorded at all
+    expect(at(lapse({ r: 1 }), "due-cell")).toEqual({ cell: "due-cell", alpha: 1, beta: 2 })
   })
 
   test("[MUST-FAIL] a lapse counts even when its grader also saw the walk's hops: a deadline passing is a fact, not a judgment", () => {
@@ -201,7 +203,7 @@ describe("posterior fold", () => {
   test("a grade whose evidence_refs name a deadline row it was not given judges nothing: refused as judged (a pin: the fold never reaches outside input_refs)", () => {
     const due = row("due", "described", { selection_ref: answerSel.id, within_ms: 60_000, at: Date.parse("2026-11-10T10:00:00Z"), input_refs: [ask.id] })
     const g = row("outcome", "described", { r: 0, selection_ref: outcomeSel.id, input_refs: [ask.id, answer.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
-    expect(F.grades([...base, due, g], seq, seq).at(-1)).toMatchObject({ ok: false, refused: "judged" })
+    expect(F.grades([...base, due, g], seq, seq).find((x) => x.id === g.id)).toMatchObject({ ok: false, refused: "judged" })
   })
 
   test("[MUST-FAIL] a described grade judging another request's row judges nothing, though it was given that row", () => {
@@ -211,8 +213,8 @@ describe("posterior fold", () => {
     const lapseOf = (due: Row) => row("outcome", "described", { r: 0, selection_ref: outcomeSel.id, input_refs: [ask.id, due.id], evidence_refs: [due.id], t: "2026-11-10T10:30:00Z" })
     const [g1, g2] = [lapseOf(theirs), lapseOf(mine)]
     const gs = F.grades([...base, other, theirs, mine, g1, g2], seq, seq)
-    expect(gs.at(-2)).toMatchObject({ ok: false, refused: "judged" })
-    expect(gs.at(-1)).toMatchObject({ ok: true, deadline: true }) // its own request's lapse still counts (a guard)
+    expect(gs.find((x) => x.id === g1.id)).toMatchObject({ ok: false, refused: "judged" })
+    expect(gs.find((x) => x.id === g2.id)).toMatchObject({ ok: true, deadline: true }) // its own request's lapse still counts (a guard)
   })
 
   test("[MUST-FAIL] (B) what a grade may judge is read from the owner's newest outcome schema: another described row it saw makes it unclean", () => {

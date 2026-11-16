@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
-import { blames, grades, promises, standing } from "./fold"
+import { LAPSE, blames, grades, promises, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
@@ -145,10 +145,11 @@ const exogenous = (from: Row[]): Row[] =>
 // outcome at r 1 is the walk grading its own answer and does not close a request: an independent grade (by information,
 // not only by a person) would, and is not built yet. "Answers it" is provenance: the judged row cites the request in
 // its input_refs.
-const closed = (): Set<string> => {
+const closed = (byRule = true): Set<string> => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const out = new Set<string>()
-  for (const g of standing(rows, seq, seq)) {
+  // byRule false: the closes a writer's grade made, without the fold's derived lapses (lapsed() reads that, below)
+  for (const g of standing(rows, seq, seq).filter((k) => byRule || k.by !== LAPSE)) {
     const ends = (g.r === 1 && g.by === PERSON && !promises(rows, byId.get(g.judged))) || (g.r === 0 && g.deadline)
     if (ends) for (const id of [byId.get(g.judged)?.input_refs].flat()) out.add(String(id))
   }
@@ -411,8 +412,10 @@ export const lapsed = (deadlineShape: string, _answerShape: string, now: number,
   const byId = new Map(rows.map((r) => [r.id, r]))
   const exo = new Set(exogenous(rows).map((r) => r.id))
   const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => exo.has(id))
-  const judged = new Set(standing(rows, seq, seq).map((k) => k.judged))
-  const done = closed()
+  // what a written grade judged or closed: the fold's own derived lapses (fold.ts LAPSE) are what this lists, by the wall
+  // clock, so they neither hide it nor close the ask here
+  const judged = new Set(standing(rows, seq, seq).filter((k) => k.by !== LAPSE).map((k) => k.judged))
+  const done = closed(false)
   // A request's deadline is its FIRST deadline row: a later one, written after an answer, does not move it, or a
   // request answered only by its own walk would renew its deadline forever and never close. Only a person's verdict
   // (closed) ends it before then; an answer alone does not.
@@ -526,17 +529,23 @@ export const projected = (rs: Row[]): Row[] => {
 // row is replaced. It is its own field, so the writer's own fields (a grader's why) are kept as written. Computed once per sequence number, from one pass of the fold's grades (the standing ones are
 // each writer's latest valid grade of an answer, as standing() keeps them), and put on copies: the stored rows are
 // never changed.
-let standingAt: { seq: number; why: Map<string, { counted: boolean; why?: string }> } | undefined
+// A deadline the rule lapsed (fold.ts LAPSE: no row is written for it) is said on the deadline row itself, wherever it
+// is read: lapsed {at, standing}, so a producer, a retrospective or the page sees why a request closed as failed.
+let standingAt: { seq: number; why: Map<string, { counted: boolean; why?: string }>; lapses: Map<string, { counted: boolean; why?: string }> } | undefined
 const withStanding = (out: Row[]): Row[] => {
-  if (!out.some((r) => r.shape === OUTCOME)) return out
   if (standingAt?.seq !== seq) {
     const all = grades(rows, seq, seq)
     const stands = new Set([...new Map(all.filter((g) => g.ok).map((g) => [g.key, g])).values()].map((g) => g.id))
-    const why = new Map(all.map((g) => [g.id, stands.has(g.id) ? { counted: true } : { counted: false, why: g.refused ?? "replaced" }]))
-    standingAt = { seq, why }
+    const of = (g: (typeof all)[number]) => (stands.has(g.id) ? { counted: true } : { counted: false, why: g.refused ?? "replaced" })
+    const why = new Map(all.map((g) => [g.id, of(g)]))
+    const lapses = new Map(all.filter((g) => g.by === LAPSE).map((g) => [g.judged, of(g)]))
+    standingAt = { seq, why, lapses }
   }
-  const m = standingAt.why
+  const { why: m, lapses } = standingAt
+  if (!out.some((r) => r.shape === OUTCOME || lapses.has(r.id))) return out
   return out.map((r) => {
+    const lapse = lapses.get(r.id)
+    if (lapse !== undefined) return { ...r, lapsed: { at: r.at, standing: lapse } }
     if (r.shape !== OUTCOME) return r
     return { ...r, standing: m.get(r.id) ?? { counted: false, why: "not_a_grader" } }
   })

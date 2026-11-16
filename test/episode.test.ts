@@ -762,6 +762,20 @@ describe("the walk's episode", () => {
     expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id)
   })
 
+  test("[MUST-FAIL] a deadline the rule lapsed is said on the deadline row wherever it is read, and its ask is no longer a root", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = (await r.ask("by when")) as { id: string }
+    const sel = await r.select(a.id)
+    const due = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [a.id] }, desc)
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).toContain(a.id) // nothing passed yet by the store's clock
+    await Bun.sleep(20)
+    await r.write(NODE_KEY, { shape: "hop", phase: "ended", selection_ref: sel.id, input_refs: [sel.id] }, walk) // the clock moves
+    const read = ((await r.call(NODE_KEY, { type: "record_read", ids: [due.id] })) as Record<string, any>[])[0]
+    expect(read?.lapsed).toEqual({ at: due.at, standing: { counted: true } })
+    expect((await r.episodes()).roots.map((x: any) => x.root.id)).not.toContain(a.id)
+  })
+
   test("[MUST-FAIL] an ask under a key identity has not marked (unclassified) is stored but is no request: no root, until identity marks it", async () => {
     const r = await fresh()
     await r.arm()
