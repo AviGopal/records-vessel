@@ -555,15 +555,28 @@ const withStanding = (out: Row[]): Row[] => {
   })
 }
 
-// A read that names nothing to narrow by would answer the whole store, serialized in one answer: one such call from any
-// caller can hold records (and every walk reading it) for as long as that takes. So a plain read must name at least one
-// of these, or a limit; what it named is checked here, before any row is read, and refused by name.
-const NARROWS = ["shape", "ids", "after_seq", "refs_to", "where", "latest_by", "has", "limit"] as const
+// A read that narrows nothing answers the whole store, serialized in one answer: one such call from any caller can hold
+// records (and every walk reading it) for as long as that takes. So a plain read must name what it reads by (a shape,
+// ids, the rows citing one row, or a non-empty where), or bound its answer with a limit. after_seq, has and latest_by
+// narrow only beside one of those: alone, each still answers rows of every shape (after_seq 0 is the whole store). The
+// limit bounds the answer, not the scan: the newest N are taken after the match. Checked before any row is read, and
+// each field's type with it: a malformed field is the caller's to fix, refused by name (400), never a records fault.
+const BY = ["shape", "ids", "refs_to", "where", "limit"] as const
+const ONLY_BESIDE = ["after_seq", "has", "latest_by"] as const
+const TYPES: Record<string, (v: unknown) => boolean> = {
+  shape: (v) => typeof v === "string", refs_to: (v) => typeof v === "string", latest_by: (v) => typeof v === "string", has: (v) => typeof v === "string",
+  ids: (v) => Array.isArray(v) && v.every((x) => typeof x === "string"),
+  where: (v) => typeof v === "object" && v !== null && !Array.isArray(v),
+  after_seq: (v) => typeof v === "number" && Number.isFinite(v),
+  limit: (v) => Number.isInteger(v) && (v as number) > 0,
+}
 export const unnarrowed = (q: Query): string | undefined => {
-  if (q.limit !== undefined && !(Number.isInteger(q.limit) && q.limit > 0)) return "record_read limit must be a whole number above 0"
+  const bad = Object.keys(TYPES).filter((k) => (q as Record<string, unknown>)[k] !== undefined && !TYPES[k]((q as Record<string, unknown>)[k]))
+  if (bad.length > 0) return `record_read ${bad.map((k) => k === "limit" ? "limit must be a whole number above 0" : `${k} is not ${k === "ids" ? "a list of ids" : k === "where" ? "an object" : k === "after_seq" ? "a number" : "a string"}`).join("; ")}`
   if (q.head === true || q.call_id !== undefined || q.episode !== undefined || (q.root !== undefined && q.calls === "all")) return undefined
-  const named = NARROWS.filter((k) => q[k] !== undefined && !(k === "where" && Object.keys(q.where ?? {}).length === 0))
-  return named.length > 0 ? undefined : `record_read names nothing to narrow by: give one of ${NARROWS.join(", ")}`
+  const by = BY.filter((k) => q[k] !== undefined && !(k === "where" && Object.keys(q.where ?? {}).length === 0))
+  return by.length > 0 ? undefined
+    : `record_read names nothing to narrow by: give one of ${BY.join(", ")} (${ONLY_BESIDE.join(", ")} narrow only beside one of them)`
 }
 
 export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> | { at_seq: number } => {

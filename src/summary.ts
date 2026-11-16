@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { Refused } from "./dispatch"
 // What rows of one shape hold, as counts: for each field asked (a dotted path, pointer.type; a list counts each of its
 // elements), how many distinct values it takes and its most common short ones. So a walk about to edit code that keys
 // on a field can read what values rows actually carry (agf_yn70bvzk53ud: d929 keyed an edit on a pointer type no row
@@ -42,10 +43,6 @@ const NEVER = /^(writer|signature|by_key)$|key|token|secret|password|credential/
 // The keys a summary query takes, read from its declared schema (one list, never a second one to drift) and the
 // call's type; any other is refused, so a summary is never quietly wider than asked (qa).
 const SUMMARY_KEYS = new Set(["type", ...Object.keys(SUMMARY_INPUTS.properties)])
-/** A refusal of what the caller asked, thrown from inside a handler: answered 400, as the caller's (index.ts). Any other
- * throw is records failing. */
-export class Refused extends Error {}
-
 /** A summary query, read and answered: refused (thrown) when it carries any other key or lacks shape or summarize. */
 export const serveSummary = (rows: Row[], q: Record<string, unknown>): Summary => {
   const extra = Object.keys(q).filter((k) => !SUMMARY_KEYS.has(k))

@@ -2,11 +2,12 @@
 import { type Who, authenticate, ownOrg } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
 import { costed } from "./cost"
-import { Refused, SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } from "./summary"
+import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } from "./summary"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
 import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_SUMMARY, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
+import { dispatch } from "./dispatch"
 import { type Query, lapsed, lastSeq, rows, serveRead, unnarrowed, wait, waitExact, write } from "./store"
 
 type Pointer = Query & {
@@ -143,16 +144,7 @@ const handle = async (req: Request): Promise<Response> => {
   if (p === undefined || typeof p !== "object" || p === null || !HANDLERS.has(p.type)) {
     return fail(400, type)
   }
-  // A handler that throws is records failing, not the caller (a refusal of what was asked is thrown as Refused: 400): answered 500 (so the caller's move is not blamed for it)
-  // and said in the journal by shape and error, never with the pointer's values.
-  try {
-    const h = HANDLERS.get(p.type) as Handler
-    return await h(p, who)
-  } catch (e) {
-    if (e instanceof Refused) return Response.json({ failure: { status: 400, body: String(e) } }, { status: 400 })
-    console.error(`[records] ${p.type} failed: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`.slice(0, 400))
-    return Response.json({ failure: { status: 500, body: String(e) } }, { status: 500 })
-  }
+  return dispatch(p, who, HANDLERS)
 }
 
 Bun.serve({
