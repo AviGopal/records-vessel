@@ -258,8 +258,10 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   }
   const counted = new Set(real.filter((g) => g.ok).map((g) => g.judged))
   const asksOf = (r: Row | undefined): string[] => refsOf(r).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
-  // the asks a person's Right on a result reached (not on a promise: "Accurate, not done"), found once
-  const reachedAsks = new Set(real.filter((g) => g.ok && g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged)))
+  // the asks a written grade already closed, as closed() and lapsed() read them: a person's Right on a result (not on a
+  // promise: "Accurate, not done"), or a counted written lapse on any of its deadlines. Found once. A derived lapse on
+  // such an ask would only add a second debit for the same miss (database: 5 asks closed by written lapses).
+  const reachedAsks = new Set(real.filter((g) => g.ok && ((g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged))) || (g.r === 0 && g.deadline)))
     .flatMap((g) => asksOf(byId.get(g.judged))))
   const firstDue = new Map<string, Row>()
   for (const r of timeline) {
@@ -315,10 +317,23 @@ export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
 // {shape, deferred_by: f} marks a row of that shape carrying f (not null) as a promise; only the owner's newest
 // non-variant schema counts. The walk's due/grade rule is to read the same entry (not yet installed). With no such
 // entry, no answer promises, as before.
+// The newest owner outcome schema of a row list, found once per list (and its length: lists are append-only), not per
+// call: promises() is asked for every grade, and a filter of the whole store each time made a cold standing() ~18x
+// slower on the live rows (database).
+const outcomeSchemaOf = (() => {
+  const byList = new WeakMap<Row[], { n: number; schema: Row | undefined }>()
+  return (all: Row[]): Row | undefined => {
+    const c = byList.get(all)
+    if (c !== undefined && c.n === all.length) return c.schema
+    const schema = all.filter((x) => x.shape === SHAPE_SCHEMA && x.role === OWNER && String(x.target) === OUTCOME && !x.variant)
+      .sort((a, b) => a.seq - b.seq).at(-1)
+    byList.set(all, { n: all.length, schema })
+    return schema
+  }
+})()
 export const promises = (all: Row[], r: Row | undefined): boolean => {
   if (r === undefined) return false
-  const schema = all.filter((x) => x.shape === SHAPE_SCHEMA && x.role === OWNER && String(x.target) === OUTCOME && !x.variant)
-    .sort((a, b) => a.seq - b.seq).at(-1)
+  const schema = outcomeSchemaOf(all)
   return [schema?.evidence ?? []].flat().some((e) => typeof e === "object" && e !== null &&
     (e as { shape?: unknown }).shape === r.shape && typeof (e as { deferred_by?: unknown }).deferred_by === "string" &&
     r[(e as { deferred_by: string }).deferred_by] !== undefined && r[(e as { deferred_by: string }).deferred_by] !== null)

@@ -46,6 +46,15 @@ describe("a deadline that passed ungraded lapses by rule", () => {
     const rows = [...w.base, gSel, written, tick(120_000)]
     expect(lapseOf(rows, w.due)).toBeUndefined()
   })
+  test("[MUST-FAIL] an ask a counted written lapse already closed (on a later deadline) gets no second, derived one", () => {
+    const w = world()
+    const later = row("due", "described", { within_ms: 1000, at: T0 + 90_000, selection_ref: w.dueSel.id, input_refs: [w.ask.id] }, 5_000)
+    const gSel = row("selection", "walk", { arm: "treated", cell: "judge", root: w.ask.id })
+    const written = row("outcome", "described", { r: 0, selection_ref: gSel.id, input_refs: [w.ask.id, later.id], evidence_refs: [later.id] }, 100_000)
+    const rows = [...w.base, later, gSel, written, tick(120_000)]
+    expect(F.grades(rows, seq, seq).find((g) => g.id === written.id)).toMatchObject({ ok: true, deadline: true }) // closed by it
+    expect(lapseOf(rows, w.due)).toBeUndefined()
+  })
   test("[MUST-FAIL] a person's Right on a result closes the ask: no lapse", () => {
     const w = world()
     const aSel = row("selection", "walk", { arm: "treated", cell: "answer", root: w.ask.id })
