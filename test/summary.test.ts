@@ -116,6 +116,12 @@ describe("records serving the summary", () => {
     expect(JSON.stringify(r.body)).not.toContain('"id"')
   })
 
+  test("[MUST-FAIL] a summary call exactly as the walk forwards it (its transport keys included) answers counts (agf_a1p01pv553ex)", async () => {
+    const r = await call({ type: "record_summary", shape: "request", summarize: ["pointer.type"], selection_ref: "sel-1", call_id: "c-1", input_refs: ["w1", "x2"] })
+    expect(r.status).toBe(200)
+    expect(r.body.fields["pointer.type"].top).toEqual([["fs_read", 1]])
+  })
+
   test("[MUST-FAIL] a summary query with any other key is refused, never answered wider than asked (qa)", async () => {
     for (const extra of [{ root: "w1", calls: "all" }, { ids: ["x"] }, { where: { role: "person" } }]) {
       const r = await call({ type: "record_summary", shape: "request", summarize: ["pointer.type"], ...extra })

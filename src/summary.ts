@@ -21,6 +21,11 @@ export const SUMMARY_INPUTS = {
       description: "The fields to count: dotted paths into a row (pointer.type); a list counts each element.",
     },
     top: { type: "integer", minimum: 1, maximum: 20, description: "How many of the most common values to show per field." },
+    // The walk's transport (walk calls.ts TRANSPORT): which selection, call and rows a forwarded call is for. Taken and
+    // ignored, so a strict schema still holds as written (agf_a1p01pv553ex: every walk call was refused for them).
+    selection_ref: { type: "string", description: "The walk's transport, ignored." },
+    call_id: { type: "string", description: "The walk's transport, ignored." },
+    input_refs: { type: "array", items: { type: "string" }, description: "The walk's transport, ignored." },
   },
 } as const
 export const SUMMARY_DESCRIPTION = "Counts what the rows of one shape hold, without returning any row: for each field in " +
@@ -34,8 +39,9 @@ export const SUMMARY_ANSWERS = "{shape, count, newest_seq, fields: {<path>: {dis
 const SHOWN_ROLES = new Set([WALK, DESCRIBED, DETECTOR])
 // Paths that name who wrote a row or what proves it: never summarized (qa: a writer list names key-holders).
 const NEVER = /^(writer|signature|by_key)$|key|token|secret|password|credential/i
-// The keys a summary query takes; any other is refused, so a summary is never quietly wider than asked (qa).
-const SUMMARY_KEYS = new Set(["type", "shape", "summarize", "top"])
+// The keys a summary query takes, read from its declared schema (one list, never a second one to drift) and the
+// call's type; any other is refused, so a summary is never quietly wider than asked (qa).
+const SUMMARY_KEYS = new Set(["type", ...Object.keys(SUMMARY_INPUTS.properties)])
 /** A summary query, read and answered: refused (thrown) when it carries any other key or lacks shape or summarize. */
 export const serveSummary = (rows: Row[], q: Record<string, unknown>): Summary => {
   const extra = Object.keys(q).filter((k) => !SUMMARY_KEYS.has(k))
