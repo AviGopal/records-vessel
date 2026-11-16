@@ -2,6 +2,7 @@
 import { type Who, authenticate, ownOrg } from "./auth"
 import { PORT, VESSEL_ID } from "./config"
 import { costed } from "./cost"
+import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS } from "./summary"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
@@ -155,5 +156,9 @@ Bun.serve({
     process.exit(1)
   },
 })
-await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_LAPSED, POSTERIOR])
+// Only record_read's summary form is declared, so a schema-filling caller (the walk's request producer) can ask what rows
+// hold, never for the rows themselves (summary.ts).
+await register([RECORD_WRITE, RECORD_READ, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_LAPSED, POSTERIOR], {
+  shape_inputs: { [RECORD_READ]: SUMMARY_INPUTS }, shape_descriptions: { [RECORD_READ]: SUMMARY_DESCRIPTION }, shape_answers: { [RECORD_READ]: SUMMARY_ANSWERS },
+})
 await beat()

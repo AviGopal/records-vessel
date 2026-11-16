@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
 import { blames, grades, standing } from "./fold"
+import { type Summary, summarize } from "./summary"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
 } from "./shapes"
@@ -25,6 +26,10 @@ export type Query = {
   head?: boolean
   // Only rows that hold this field (any value): after latest_by, so a thing whose latest row dropped the field shows nothing.
   has?: string
+  // Counts of what rows of shape hold, field by field, instead of the rows (summary.ts): the form schema-filling callers
+  // are offered.
+  summarize?: string[]
+  top?: number
 }
 
 const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW])
@@ -481,10 +486,11 @@ const withStanding = (out: Row[]): Row[] => {
   })
 }
 
-export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> | { at_seq: number } => {
+export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes> | { at_seq: number } | Summary => {
   // The store's latest seq alone (head: true): what a reader counting "rows written since" counts against, without
   // reading any rows or folding grades.
   if (q.head === true) return { at_seq: lastSeq() }
+  if (Array.isArray(q.summarize) && typeof q.shape === "string") return summarize(rows, q.shape, q.summarize.map(String), q.top)
   if (typeof q.root === "string" && q.calls === "all") return rootCalls(q.root, q.output !== false)
   if (typeof q.call_id === "string") return oneCall(q.call_id)
   if (q.episode !== undefined && Array.isArray(q.calls)) return walkCalls(q.episode, q.calls)

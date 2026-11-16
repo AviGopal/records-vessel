@@ -21,8 +21,8 @@ const post = async (path: string, payload: object): Promise<Answer> => {
   return (await r.json()) as Answer
 }
 
-export const register = async (shapes: string[]): Promise<void> => {
-  await post(REGISTER, { vesselId: VESSEL_ID, endpoint: ENDPOINT, shapes, resolve_timeout_ms: NO_LIMIT_MS })
+export const register = async (shapes: string[], declared: { shape_inputs?: object; shape_descriptions?: object; shape_answers?: object } = {}): Promise<void> => {
+  await post(REGISTER, { vesselId: VESSEL_ID, endpoint: ENDPOINT, shapes, resolve_timeout_ms: NO_LIMIT_MS, ...declared })
 }
 
 export const beat = async (): Promise<void> => {
