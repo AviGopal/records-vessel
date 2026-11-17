@@ -238,7 +238,7 @@ describe("posterior fold", () => {
     const sawHops = grade({ input_refs: [ask.id, answer.id, hop.id] }) // an answer grade that saw the walk's hops: refused
     const t = F.tally?.([...base, dueSel, due, graderSel, lapse, sawHops, person], seq, seq)
     // a lapse the grader writes is kept and counts for nothing: the rule records deadlines (the USER, 11-16)
-    expect(t).toEqual({ written: { answer: 1, lapse: 1, detector: 0 }, counted: { answer: 0, lapse: 0, detector: 0 }, refused: { unclean: 1, by_rule: 1 } })
+    expect(t).toEqual({ written: { answer: 1, lapse: 1, detector: 0 }, counted: { answer: 0, lapse: 0, detector: 0 }, refused: { unclean: 1, by_rule: 1 }, untargeted: 0 })
   })
 
   test("a row with only a guessed `at` (no within_ms) is not a deadline: no waits are debited", () => {

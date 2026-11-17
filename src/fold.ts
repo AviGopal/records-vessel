@@ -352,14 +352,46 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // being written that the fold never counts. Cumulative: a reader compares two of these to see what changed between.
 // A detector's closing of a gap (gapClosures) is tallied as a kind of its own, so a credit path that never counts (written,
 // none counted) shows.
-export type Tally = { written: { answer: number; lapse: number; detector: number }; counted: { answer: number; lapse: number; detector: number }; refused: Record<string, number> }
+// untargeted: of the model's counted grades of 1 on an answer, how many were of a request that named no target, while the
+// owner's grader holds grades to targets (its outcome schema's x-reach: {from, field}, the request's newest `from` row
+// citing it, its field `field`). Such a grade is held to nothing but the answer's claim, so the count says how often
+// that exit is still taken; with no reach rule, 0. Names no shape: where targets live is the owner's schema's word.
+export type Tally = { written: { answer: number; lapse: number; detector: number }; counted: { answer: number; lapse: number; detector: number }; refused: Record<string, number>; untargeted: number }
+const reachOf = (all: Row[]): { from: string; field: string } | undefined => {
+  const x = (outcomeSchemaOf(all)?.schema as Record<string, unknown> | undefined)?.["x-reach"] as Record<string, unknown> | undefined
+  return typeof x?.from === "string" && typeof x?.field === "string" ? { from: x.from, field: x.field } : undefined
+}
+// Per row list (and length: lists are append-only), the rows by id and each request's target rows, found once: tally is
+// read with every posterior.
+const targetIndex = (() => {
+  const byList = new WeakMap<Row[], { n: number; key: string; byId: Map<string, Row>; of: Map<string, Row[]> }>()
+  return (all: Row[], src: { from: string; field: string }) => {
+    const key = `${src.from}|${src.field}`
+    const c = byList.get(all)
+    if (c !== undefined && c.n === all.length && c.key === key) return c
+    const of = new Map<string, Row[]>()
+    for (const r of all.filter((x) => x.shape === src.from)) for (const id of [r.input_refs].flat().map(String)) of.set(id, [...(of.get(id) ?? []), r])
+    const v = { n: all.length, key, byId: new Map(all.map((r) => [r.id, r])), of }
+    byList.set(all, v)
+    return v
+  }
+})()
 export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
-  const t: Tally = { written: { answer: 0, lapse: 0, detector: 0 }, counted: { answer: 0, lapse: 0, detector: 0 }, refused: {} }
+  const t: Tally = { written: { answer: 0, lapse: 0, detector: 0 }, counted: { answer: 0, lapse: 0, detector: 0 }, refused: {}, untargeted: 0 }
+  const src = reachOf(all)
+  const idx = src === undefined ? undefined : targetIndex(all, src)
   for (const g of [...grades(all, asOf, atSeq).filter((x) => x.by === DESCRIBED), ...gapClosures(all, asOf, atSeq)]) {
     const kind = g.by === DETECTOR ? "detector" : g.deadline ? "lapse" : "answer"
     t.written[kind]++
     if (g.ok) t.counted[kind]++
     else t.refused[g.refused ?? "other"] = (t.refused[g.refused ?? "other"] ?? 0) + 1
+    if (src !== undefined && idx !== undefined && g.ok && kind === "answer" && g.r === 1) {
+      const o = idx.byId.get(g.id)
+      const root = String(o?.event_ref ?? "")
+      const newest = (idx.of.get(root) ?? []).filter((r) => r.seq <= (o?.seq ?? Infinity)).sort((a, b) => b.seq - a.seq)[0]
+      const named = newest?.[src.field]
+      if (!Array.isArray(named) || named.length === 0) t.untargeted++
+    }
   }
   return t
 }
