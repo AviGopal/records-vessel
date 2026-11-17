@@ -57,6 +57,11 @@ describe("a person's grade cited by a deadline is not an ask", () => {
     const w = world({ wrong: () => row("note", "person", { r: 0 }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toMatchObject({ ok: true, r: 0 })
   })
+  test("[GUARD] a person's row with r 0 and no input_refs at all cites nothing: it is an ask, and its first due lapses", () => {
+    const w = world({ wrong: () => { const x = row("note", "person", { r: 0 }, 10_000) as Record<string, unknown>; delete x.input_refs; return x as Row } })
+    expect("input_refs" in w.wrong).toBe(false)
+    expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toMatchObject({ ok: true, r: 0 })
+  })
   test("[GUARD] a person's row with r neither 0 nor 1 judges nothing: it is an ask", () => {
     const w = world({ wrong: (a) => row("note", "person", { r: 0.5, input_refs: [a.id] }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toMatchObject({ ok: true, r: 0 })
@@ -104,6 +109,11 @@ describe("once asks are declared, only a declared shape is an ask", () => {
     const byDescribed = { ...mark(), role: "described", writer: "described" } as Row
     expect(lapseOf([byDescribed, ...w.rows, tick(120_000)], w.d1)).toMatchObject({ ok: true, r: 0 })
   })
+  test("[GUARD] only a shape_schema declares: an owner row of another shape carrying the same mark declares nothing", () => {
+    const w = world({ shape: "note", firstAt: 60_000 })
+    const channel = row("channel", "owner", { calls: [], inputs: [{ shape: "world_changed", ask: true }] })
+    expect(lapseOf([channel, ...w.rows, tick(120_000)], w.d1)).toMatchObject({ ok: true, r: 0 })
+  })
   test("[GUARD] a person's world_changed is: its first due lapses", () => {
     const w = world({ firstAt: 60_000 })
     expect(lapseOf([mark(), ...w.rows, tick(120_000)], w.d1)).toMatchObject({ ok: true, r: 0 })
@@ -147,5 +157,19 @@ describe("a promise's exemption reads asks by the same predicate", () => {
   })
   test("[MUST-FAIL] the same for any verdict a person wrote", () => {
     expect(promise("land_verdict")).toBe("exempt")
+  })
+  test("[MUST-FAIL] once asks are declared, a promise citing only a person's row of another shape is graded: that row is no ask", () => {
+    seq = 0
+    const schema = row("shape_schema", "owner", { target: "outcome", context: ["answer", "due"], evidence: [{ shape: "answer", deferred_by: "next_act" }, { shape: "due", after: "at" }] })
+    const mark = row("shape_schema", "owner", { target: "request", inputs: [{ shape: "world_changed", ask: true }] })
+    const note = row("note", "person", { what: "q" })
+    const aSel = row("selection", "walk", { arm: "treated", cell: "answer", root: note.id })
+    const next = row("answer", "described", { text: "t", next_act: { tool: "git_land" }, selection_ref: aSel.id, input_refs: [note.id] }, 1_000)
+    const gSel = row("selection", "walk", { arm: "treated", cell: "judge", root: note.id })
+    const grade = row("outcome", "described", { r: 0, selection_ref: gSel.id, input_refs: [note.id, next.id], evidence_refs: [next.id] }, 2_000)
+    const rows = [schema, mark, note, aSel, next, gSel, grade]
+    const of = (rs: Row[]) => { const g = F.grades(rs, seq, seq).find((x) => x.id === grade.id); return g?.ok ? "counted" : g?.refused }
+    // undeclared, the person's note is an ask with no deadline yet: the promise is exempt; declared, it is not one
+    expect([of(rows.filter((r) => r !== mark)), of(rows)]).toEqual(["exempt", "counted"])
   })
 })
