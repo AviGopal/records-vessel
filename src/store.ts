@@ -368,10 +368,13 @@ const earned = (w: string): (t: Row) => boolean => {
       else byRoot.set(k, new Set([s.id]))
     }
   }
+  // The walk's ended calls, in store order, found once per read, not once per template's root: each root keeps those of
+  // its selections from this list. A pass over the whole store per root grew with templates × store size.
+  const ended = rows.filter((r) => r.shape === HOP && r.writer === w && r.phase === "ended" && (r.kind === "call" || r.kind === "run"))
   const calledIn = (root: string): string[] => {
     const held = byRoot.get(root) ?? new Set<string>()
-    return rows
-      .filter((r) => r.shape === HOP && r.writer === w && r.phase === "ended" && (r.kind === "call" || r.kind === "run") && held.has(String(r.selection_ref)))
+    return ended
+      .filter((r) => held.has(String(r.selection_ref)))
       .map((r) => started.get(String(r.call_id)) ?? "")
   }
   const replays = (calls: string[], ran: string[]): boolean => {
