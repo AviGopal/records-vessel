@@ -953,3 +953,98 @@ describe("the walk's episode", () => {
     expect(await r.episode()).toContain(arm.id)
   })
 })
+
+// The walk's selection as its selectionRow writes it (walk-vessel src/loop.ts): every candidate of the draw and its
+// posterior, the posterior's seq, the move, its cell, the root, and the tick's timing.
+const realSelection = (root: string, n: number, drop: string[] = []) => {
+  const cands = Array.from({ length: n }, (_, k) => ({ id: k % 2 === 0 ? `produce/answer/${"c".repeat(64)}` : `call/fs_read${k}`, kind: k % 2 === 0 ? "produce" : "call", root }))
+  const row: Record<string, unknown> = {
+    shape: "selection", arm: "treated", cands, posts: cands.map((_c, k) => ({ alpha: 3.4300000000000006 + k, beta: 1, from: "move" })),
+    posts_seq: 41, seed: 271828, a: cands[0]!.id, from: "move", cell: `${cands[0]!.id}|world_changed,asker:person,age:0`,
+    context: ["world_changed", "asker:person", "age:0"], cell_scheme: "reads", root, pool_refs: [root], seen_key: "k".repeat(64),
+    timing: { episodes_ms: 1780, episodes_reads: 1, choices_ms: 40, posterior_ms: 12, posterior_reads: 1, draw_ms: 0, cands: n, cells: n },
+  }
+  for (const k of drop) delete row[k]
+  return row
+}
+const OMIT = { selection: ["cands", "posts", "timing"] }
+const noCost = (a: Record<string, unknown>) => JSON.stringify({ ...a, cost: undefined })
+
+describe("what the walk does not read back of its own rows", () => {
+  test("[MUST-FAIL] an episodes read naming fields of the reader's own selections answers them without those fields, marked with the ones left out", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const sels = []
+    for (let i = 0; i < 20; i++) sels.push(await r.write(NODE_KEY, realSelection(a.id, 120), walk))
+    const old = await r.write(NODE_KEY, realSelection(a.id, 3, ["timing"]), walk)
+    const theirs = await r.write(NODE_KEY, realSelection(a.id, 4), { writer: "walk-other", role: "walk" })
+    const plain = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as any
+    const thin = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: OMIT })) as any
+    const got = (id: string) => thin.roots[0].rows.find((x: { id: string }) => x.id === id)
+    for (const s of sels) {
+      expect([got(s.id).fields_omitted, "cands" in got(s.id), "posts" in got(s.id), "timing" in got(s.id)]).toEqual([["cands", "posts", "timing"], false, false, false])
+      expect([got(s.id).posts_seq, got(s.id).a, got(s.id).root, got(s.id).seen_key, got(s.id).cell]).toEqual([41, s.a, a.id, s.seen_key, s.cell])
+    }
+    expect(got(old.id).fields_omitted).toEqual(["cands", "posts"]) // what it had, not what was asked
+    expect(thin.roots[0].rows.some((x: { id: string }) => x.id === theirs.id)).toBe(false) // another walker's: not this walker's episode
+    // rows another writer wrote stay whole, whatever the reader names of them
+    const ans = await r.write(NODE_KEY, { shape: "answer", text: "I made it", selection_ref: sels[0].id, input_refs: [a.id] }, desc)
+    const named = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: { ...OMIT, answer: ["text"], world_changed: ["what"] } })) as any
+    const rows = [...named.shared, ...named.roots.flatMap((x: any) => [x.root, ...x.rows])]
+    expect([rows.find((x) => x.id === ans.id)?.text, rows.find((x) => x.id === a.id)?.what, rows.some((x) => x.id === ans.id && "fields_omitted" in x)]).toEqual(["I made it", "make a change", false])
+    expect(noCost(thin).length).toBeLessThan(noCost(plain).length / 10)
+  })
+
+  test("[MUST-FAIL] the stored rows stay whole: a read by id and a read without omit after a read with it carry every field", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const sel = await r.write(NODE_KEY, realSelection(a.id, 5), walk)
+    const before = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as any
+    const thin = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: OMIT })) as any
+    expect(thin.roots[0].rows.find((x: { id: string }) => x.id === sel.id).fields_omitted).toEqual(["cands", "posts", "timing"])
+    const after = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as any
+    expect(noCost(after)).toBe(noCost(before))
+    const byId = ((await r.call(NODE_KEY, { type: "record_read", ids: [sel.id] })) as Array<Record<string, unknown>>)[0]!
+    expect([byId.cands, byId.posts, byId.timing, byId.fields_omitted]).toEqual([sel.cands, sel.posts, sel.timing, undefined])
+  })
+
+  test("[MUST-FAIL] a row carrying fields_omitted is refused on write, under any key and role, naming it", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const thinned = { ...realSelection(a.id, 2, ["cands", "posts", "timing"]), fields_omitted: ["cands", "posts", "timing"] }
+    for (const [key, as] of [[NODE_KEY, walk], [NODE_KEY, desc], [PERSON_KEY, undefined]] as const) {
+      const w = await r.write(key, thinned, as)
+      expect([w.failure?.status, String(w.failure?.body).startsWith("fields_omitted")]).toEqual([400, true])
+    }
+    const inMeta = await r.write(NODE_KEY, { shape: "note", meta: { fields_omitted: ["x"] } }, walk)
+    expect(inMeta.failure?.status).toBe(400)
+    const stored = (await r.call(NODE_KEY, { type: "record_read", shape: "selection" })) as unknown[]
+    expect(stored).toEqual([])
+  })
+
+  test("[MUST-FAIL] a malformed omit on the episodes read is refused by name; omit beside any other read is ignored", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const sel = await r.write(NODE_KEY, realSelection(a.id, 3), walk)
+    for (const bad of ["cands", [], ["selection"], { selection: "cands" }, { selection: [1] }, { selection: null }, null]) {
+      const got = await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: bad })
+      expect([JSON.stringify(bad), got.failure?.status, String(got.failure?.body).includes("omit")]).toEqual([JSON.stringify(bad), 400, true])
+    }
+    // unknown shapes and fields change nothing, and are not refused
+    const plain = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as any
+    for (const spec of [{}, { no_such_shape: ["x"] }, { selection: [] }, { selection: ["no_such_field"] }]) {
+      expect(noCost((await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: spec })) as any)).toBe(noCost(plain))
+    }
+    // beside every other read, well formed or not, the answer is the one without it
+    for (const omit of [OMIT, "cands"]) {
+      for (const q of [{ ids: [sel.id] }, { shape: "selection" }, { where: { root: a.id } }, { episode: WALK }, { episode: WALK, calls: "all", root: a.id }]) {
+        const want = JSON.stringify(await r.call(NODE_KEY, { type: "record_read", ...q }))
+        expect([q, JSON.stringify(await r.call(NODE_KEY, { type: "record_read", ...q, omit }))]).toEqual([q, want])
+      }
+    }
+  })
+})

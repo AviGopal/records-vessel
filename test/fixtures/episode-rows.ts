@@ -210,4 +210,56 @@ export const wide = (history: number, extra: number): Row[] => {
   return rows
 }
 
-export const FIXTURES: Record<string, () => Row[]> = { mixed, gaps, idle }
+// The walk's selection with every key its selectionRow writes (walk-vessel src/loop.ts): the draw's candidates and their
+// posteriors (from a string), the posterior's seq, the seed, the move and its cell, the root alone in pool_refs, and the
+// tick's timing. `drop` leaves keys out, as an older walk wrote selections (no timing).
+const options = (root: string, n: number) => Array.from({ length: n }, (_, k) =>
+  k % 3 === 0 ? { id: `produce/answer/${"c".repeat(64)}`, kind: "produce", root } : k % 3 === 1 ? { id: `call/fs_read${k}`, kind: "call", root } : { id: `run/${String(k).repeat(64).slice(0, 64)}`, kind: "run", root })
+const realSelection = (add: ReturnType<typeof store>["add"], root: string, n: number, as: As = walk, drop: string[] = [], more: Record<string, unknown> = {}): Row => {
+  const cands = options(root, n)
+  const body: Record<string, unknown> = {
+    shape: "selection", arm: "treated", cands,
+    posts: cands.map((_c, k) => ({ alpha: 1 + k * 0.1 + 0.0000000000000006, beta: 2.43, from: k % 2 === 0 ? "cell" : "move" })),
+    posts_seq: 1000 + n, seed: 3141592653, a: cands[0]!.id, from: "move",
+    cell: `${cands[0]!.id}|world_changed,asker:person,age:0`, context: ["world_changed", "asker:person", "age:0"], cell_scheme: "reads",
+    root, pool_refs: [root], seen_key: "k".repeat(64),
+    timing: { episodes_ms: 1780, episodes_reads: 1, choices_ms: 40, posterior_ms: 12, posterior_reads: 1, draw_ms: 0, cands: n, cells: n },
+    ...more,
+  }
+  for (const k of drop) delete body[k]
+  return add(body, as)
+}
+
+// Requests worked by the walk as it writes its selections today: real-form selections on an ask, an operator's ask and
+// a held gap, one written before timing was kept, another walker's, one a schema refusal cites, an answer, a grade, a
+// deadline still ahead, and the walk's own hops and failures beside them.
+export const walked = (): Row[] => {
+  const { rows, add, hop } = store()
+  owners(add)
+  add({ shape: "hold_fact", reason_prefix: "no source frame", fact: { edit_site: "find it with tools" } }, owner)
+  const a = add({ shape: "world_changed", what: "make a change" }, person)
+  const d = add({ shape: "world_changed", what: "an operator's ask" }, operator)
+  const s1 = realSelection(add, a.id, 7)
+  hop(s1, "w1", "started", "fs_read")
+  const old = realSelection(add, a.id, 4, walk, ["timing"])
+  const theirs = realSelection(add, a.id, 5, other)
+  hop(s1, "w1", "ended", "fs_read")
+  const ans = add({ shape: "answer", text: "I made the change", selection_ref: s1.id, input_refs: [a.id] }, desc)
+  add({ shape: "due", within_ms: 1e12, selection_ref: s1.id, input_refs: [a.id] }, desc)
+  const refused = realSelection(add, a.id, 3)
+  add({ shape: "failure", status: 422, refused: "schema", selection_ref: refused.id, input_refs: [refused.id] }, walk)
+  const judge = realSelection(add, a.id, 6, walk, [], { a: "produce/outcome/x" })
+  add({ shape: "outcome", r: 1, selection_ref: judge.id, event_ref: a.id, input_refs: [a.id, ans.id] }, desc)
+  const sd = realSelection(add, d.id, 2)
+  add({ shape: "failure", kind: "skip", unserved: ["fs_read"], template_ref: "t1", selection_ref: sd.id, input_refs: [sd.id, "t1"] }, walk)
+  const g = add({ shape: "gap", gap_id: "g1", status: "open", meta: { operator_hold: true, operator_hold_reason: "no source frame names the site" } }, detector)
+  const sg = realSelection(add, g.id, 4)
+  hop(sg, "w2", "started", "git_diff")
+  add({ shape: "failure", kind: "stall", root: d.id, rows: 50, since_seq: 3, input_refs: [d.id] }, walk)
+  realSelection(add, g.id, 2, other)
+  void old
+  void theirs
+  return rows
+}
+
+export const FIXTURES: Record<string, () => Row[]> = { mixed, gaps, idle, walked }

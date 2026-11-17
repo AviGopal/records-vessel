@@ -30,6 +30,8 @@ export type Query = {
   stored?: boolean
   // The newest N of the rows the read matches, in seq order: a bound on what one read can serialize.
   limit?: number
+  // Fields of rows the reader wrote itself that it does not read back, by shape: left out of its episodes answer (omitting).
+  omit?: Record<string, string[]>
 }
 
 const MINE = new Set([SELECTION, HOP, FAILURE])
@@ -56,10 +58,16 @@ let wakers: Array<() => void> = []
 // factsOn) is a read written back, and is refused, so a writer that read without `stored` fails loud instead of storing
 // the owner's reading as if it had observed it.
 export const READ_AS_FACT = "read_as_fact"
+// The same for a row records showed thinner than written (fields_omitted, omitting): written back, it would store the
+// reader's thinned copy as if it were the row.
+export const FIELDS_OMITTED = "fields_omitted"
 export const write = (body: Record<string, unknown>, writer: string, role: string): { status: number; body: unknown } => {
   const meta = typeof body.meta === "object" && body.meta !== null ? body.meta as Record<string, unknown> : {}
   if (READ_AS_FACT in body || READ_AS_FACT in meta) {
     return { status: 400, body: { failure: { status: 400, body: `${READ_AS_FACT}: a row records showed as read (a hold shown as its fact) is not written back; read with stored: true` } } }
+  }
+  if (FIELDS_OMITTED in body || FIELDS_OMITTED in meta) {
+    return { status: 400, body: { failure: { status: 400, body: `${FIELDS_OMITTED}: a row records showed without some of its fields is not written back; read it by id for the whole row` } } }
   }
   if (String(body.shape) === PERSON_WAIT) {
     return { status: 400, body: { failure: { status: 400, body: `${PERSON_WAIT}: derived on read from the walk's failures, never written` } } }
@@ -588,6 +596,24 @@ export const projected = (rs: Row[]): Row[] => {
   })
 }
 
+// What a reader does not need of the rows it wrote itself, left out of its episodes answer (omit: {shape: [field, ...]}):
+// the walk's selections keep, for other readers, what it never reads back (every candidate and posterior of the draw),
+// and served whole each tick they were most of the answer's bytes. The reader names the fields, so records keeps no
+// list of its own. Only the reader's own rows: no reader is shown another writer's row thinner than written. Applied
+// last, on copies, so nothing records computes (standing, refusals, facts) reads a thinned row, and the stored rows are
+// whole. Each row thinned says which fields it lacks (fields_omitted: those it had, so a field never written is not
+// said to be left out), and is never written back (write()). Unknown shapes and fields leave rows as they are.
+const omitting = (omit: Record<string, string[]> | undefined, w: string) => (rs: Row[]): Row[] => {
+  if (omit === undefined) return rs
+  return rs.map((r) => {
+    const gone = r.writer === w && Object.hasOwn(omit, r.shape) ? [...new Set(omit[r.shape])].filter((k) => Object.hasOwn(r, k)) : []
+    if (gone.length === 0) return r
+    const kept: Row = { ...r }
+    for (const k of gone) delete kept[k]
+    return { ...kept, [FIELDS_OMITTED]: gone }
+  })
+}
+
 // Whether each grade counted, as the fold decides it, on every outcome row a read returns, under `standing` (counted, or
 // why not: the fold's own reason; "replaced" when the same writer graded the same answer again later; "not_a_grader" for
 // an outcome written in a role the fold takes no grade from). A reader shown a grade is shown its standing, so a grade
@@ -632,9 +658,16 @@ const TYPES: Record<string, (v: unknown) => boolean> = {
   after_seq: (v) => typeof v === "number" && Number.isFinite(v),
   limit: (v) => Number.isInteger(v) && (v as number) > 0,
 }
+// omit is read on the episodes read alone (serveRead's roots: "all" branch), so it is checked there only; beside any
+// other read it is ignored, as any field a read does not take.
+const episodesRead = (q: Query): boolean => q.head !== true && !(typeof q.root === "string" && q.calls === "all") && typeof q.call_id !== "string" &&
+  q.episode !== undefined && !Array.isArray(q.calls) && q.roots === "all"
+const isOmit = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v) &&
+  Object.values(v).every((fs) => Array.isArray(fs) && fs.every((f) => typeof f === "string"))
 export const unnarrowed = (q: Query): string | undefined => {
   const bad = Object.keys(TYPES).filter((k) => (q as Record<string, unknown>)[k] !== undefined && !TYPES[k]((q as Record<string, unknown>)[k]))
   if (bad.length > 0) return `record_read ${bad.map((k) => k === "limit" ? "limit must be a whole number above 0" : `${k} is not ${k === "ids" ? "a list of ids" : k === "where" ? "an object" : k === "after_seq" ? "a number" : "a string"}`).join("; ")}`
+  if (q.omit !== undefined && episodesRead(q) && !isOmit(q.omit)) return "record_read omit is not an object of shape to a list of field names"
   if (q.head === true || q.call_id !== undefined || q.episode !== undefined || (q.root !== undefined && q.calls === "all")) return undefined
   const by = BY.filter((k) => q[k] !== undefined && !(k === "where" && Object.keys(q.where ?? {}).length === 0))
   return by.length > 0 ? undefined
@@ -653,7 +686,8 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   if (q.episode !== undefined) {
     if (q.roots !== "all") return projected(withStanding(episode(q.episode)))
     const all = episodes(q.episode)
-    return { shared: projected(withStanding(all.shared)), roots: all.roots.map((x) => ({ ...x, rows: projected(withStanding(x.rows)) })) }
+    const thin = omitting(q.omit, q.episode)
+    return { shared: thin(projected(withStanding(all.shared))), roots: all.roots.map((x) => ({ ...x, rows: thin(projected(withStanding(x.rows))) })) }
   }
   // Any other read ({ids}, {shape}, {where}): the selections are answered whole (a reader by id wants their refs), but a
   // hold the owner reads as a fact is shown as its fact here too. A call's stored output (rootCalls, oneCall, walkCalls)

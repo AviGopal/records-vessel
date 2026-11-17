@@ -11,7 +11,9 @@ import { join } from "node:path"
 import type { Row } from "../../src/store"
 import { FIXTURES, WALKER, wide } from "./episode-rows"
 
-type Job = { fixture?: string; prefixes?: number[]; wide?: [number, number] }
+//   {omit: [fixture, spec]}: for each prefix, the episodes answer without omit and with it, the no-omit answer read
+//   again after it, and whether the store's rows were the same after as before.
+type Job = { fixture?: string; prefixes?: number[]; wide?: [number, number]; omit?: [string, Record<string, unknown>] }
 const job = JSON.parse(await Bun.file(process.argv[2]!).text()) as Job
 const say = (v: unknown): void => writeFileSync(process.argv[3]!, JSON.stringify(v))
 const DIR = process.env.RECORDS_DATA_DIR!
@@ -42,6 +44,18 @@ if (job.fixture !== undefined) {
     last = { n, one, all }
   }
   say({ fixture: job.fixture, rows: rows.length, prefixes: out, last })
+} else if (job.omit !== undefined) {
+  const rows = FIXTURES[job.omit[0]]!()
+  const out: unknown[] = []
+  for (let n = 1; n <= rows.length; n++) {
+    const store = await load(rows.slice(0, n))
+    const before = JSON.stringify(store.rows)
+    const plain = store.serveRead({ episode: WALKER, roots: "all" })
+    const thin = store.serveRead({ episode: WALKER, roots: "all", omit: job.omit[1] } as Parameters<typeof store.serveRead>[0])
+    const again = store.serveRead({ episode: WALKER, roots: "all" })
+    out.push({ n, plain, thin, again: sha(again) === sha(plain), stored: JSON.stringify(store.rows) === before })
+  }
+  say(out)
 } else if (job.wide !== undefined) {
   const rows = wide(job.wide[0], job.wide[1])
   const store = await load(rows)
