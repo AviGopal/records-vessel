@@ -2,9 +2,9 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
-import { LAPSE, blames, grades, promises, standing } from "./fold"
+import { LAPSE, blames, grades, openPersonWaits, promises, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -63,6 +63,9 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   const meta = typeof body.meta === "object" && body.meta !== null ? body.meta as Record<string, unknown> : {}
   if (READ_AS_FACT in body || READ_AS_FACT in meta) {
     return { status: 400, body: { failure: { status: 400, body: `${READ_AS_FACT}: a row records showed as read (a hold shown as its fact) is not written back; read with stored: true` } } }
+  }
+  if (String(body.shape) === PERSON_WAIT) {
+    return { status: 400, body: { failure: { status: 400, body: `${PERSON_WAIT}: derived on read from the walk's failures, never written` } } }
   }
   if (OWNER_SHAPES.has(String(body.shape))) {
     if (role !== OWNER) {
@@ -687,6 +690,11 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   // Any other read ({ids}, {shape}, {where}): the selections are answered whole (a reader by id wants their refs), but a
   // hold the owner reads as a fact is shown as its fact here too. A call's stored output (rootCalls, oneCall, walkCalls)
   // is the answer the call got, kept as it was: a records read in it was made through this function.
+  // Who is waiting on a person now: derived from the walk's failures, never a stored row (fold.ts openPersonWaits).
+  if (q.shape === PERSON_WAIT) {
+    const waits = openPersonWaits(rows)
+    return q.limit === undefined ? waits : waits.slice(-q.limit)
+  }
   const matched = read(q)
   const kept = q.limit === undefined ? matched : matched.slice(-q.limit)
   return withStanding(q.stored === true ? kept : factsOn(kept))

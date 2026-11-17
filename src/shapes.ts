@@ -8,6 +8,9 @@ export const RECORD_WAIT = "record_wait"
 export const RECORD_WAIT_EXACT = "record_wait_exact"
 export const POSTERIOR = "posterior"
 export const RECORD_LAPSED = "record_lapsed"
+// A root waiting on a person now (the person-waits ruling): derived on read from the walk's failures that say waits_for
+// person (fold.ts openPersonWaits), never stored, so no writer can make one.
+export const PERSON_WAIT = "person_wait"
 export const ACTIVITY_TEMPLATE = "activity_template"
 export const SELECTION = "selection"
 export const HOP = "hop"

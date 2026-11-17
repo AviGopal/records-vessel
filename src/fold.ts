@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK , INFRA_WINDOW } from "./shapes"
+import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK , INFRA_WINDOW, PERSON_WAIT } from "./shapes"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -95,6 +95,29 @@ const personWait = (seen: Row[], byId: Map<string, Row>) => {
     return w !== undefined && !persons.some((p) => p.seq > w.seq && p.seq <= at && about(p, root))
   }
   return { persons, about, waitingAt }
+}
+
+// WHO IS WAITING ON A PERSON NOW (the person-waits ruling), by personWait's own reading at the store's newest row: each
+// root whose latest walk failure saying waits_for person has had no person row about the root since. One derived row
+// per such root, oldest first, named for that failure (person_wait:<its id>, the same across reads, never the failure's
+// own id) and naming its root plainly, so a page can draw the ask beside it; with the tree and repo the wait is about
+// as the failure row states them as fields (the walk lifting them from the tool's answer), never read from the failure's
+// text, and null when it states none (a wait written before the walk named them), so a reader is told it is unknown.
+// Derived only: records refuses a stored one.
+export const openPersonWaits = (seen: Row[]): Row[] => {
+  const byId = new Map(seen.map((r) => [r.id, r]))
+  const { waitingAt } = personWait(seen, byId)
+  const at = seen.reduce((m, r) => Math.max(m, r.seq), 0) + 1
+  const latest = new Map<string, Row>()
+  for (const f of seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.waits_for === "person").sort((x, y) => x.seq - y.seq)) {
+    const root = byId.get(String(f.selection_ref))?.root
+    if (typeof root === "string") latest.set(root, f)
+  }
+  return [...latest.entries()].filter(([root]) => waitingAt(root, at)).map(([root, f]) => ({
+    shape: PERSON_WAIT, id: `${PERSON_WAIT}:${f.id}`, writer: "records", role: "records", root, waits_for: "person", seq: f.seq, t: f.t,
+    selection_ref: f.selection_ref, input_refs: [f.id],
+    tree: typeof f.tree === "string" ? f.tree : null, repo: typeof f.repo === "string" ? f.repo : null,
+  }) as Row).sort((x, y) => x.seq - y.seq)
 }
 
 // The selections whose own move failed: a failure row the walk that made the selection wrote, whatever the status or
