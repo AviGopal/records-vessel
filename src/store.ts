@@ -217,9 +217,32 @@ const openGaps = (from: Row[]): Row[] => {
 // close it, since what closes a request is a grade of an answer to it.
 const verdict = (r: Row): boolean => (r.r === 0 || r.r === 1) && [r.input_refs].flat().filter((x) => x !== undefined).length > 0
 
+// WHAT AN ASK IS, AS THE OWNER DECLARES IT (the USER, 11-17: "Approve"): a shape some owner schema marks as the input it
+// answers (an inputs entry {shape, ask: true}: the request schema's world_changed). Read from the newest owner schema of
+// each target and variant, so nothing here names a shape. Once any is declared, a root is an exogenous row of a declared
+// ask shape, and every other owner row is the owner's configuration, shared with the walk. With none declared, today's
+// rule holds: any exogenous row of a shape outside the owner's configuration list opens a root, and only the listed
+// shapes are shared.
+const askShapes = (): Set<string> | undefined => {
+  const newest = new Map<string, Row>()
+  for (const r of rows.filter((x) => x.shape === SHAPE_SCHEMA && x.role === OWNER).sort((a, b) => a.seq - b.seq)) {
+    newest.set(`${String(r.target)}|${String(r.variant ?? "")}`, r)
+  }
+  const out = new Set<string>()
+  for (const s of newest.values()) {
+    for (const e of [s.inputs ?? []].flat()) {
+      const o = typeof e === "object" && e !== null ? e as { shape?: unknown; ask?: unknown } : undefined
+      if (o?.ask === true && typeof o.shape === "string") out.add(o.shape)
+    }
+  }
+  return out.size > 0 ? out : undefined
+}
+const asks = (from: Row[], declared: Set<string> | undefined): Row[] => declared === undefined ? exogenous(from)
+  : from.filter((r) => EXO_ROLES.has(r.role) && declared.has(r.shape))
+
 const openRoots = (w: string): Row[] => {
   const done = closed()
-  const open = [...exogenous(rows).filter((r) => r.shape !== OUTCOME).filter((r) => !verdict(r)).filter((r) => !done.has(r.id)), ...openGaps(rows)]
+  const open = [...asks(rows, askShapes()).filter((r) => r.shape !== OUTCOME).filter((r) => !verdict(r)).filter((r) => !done.has(r.id)), ...openGaps(rows)]
     .sort((a, b) => a.seq - b.seq)
   if (open.length > 0) return open
   const arms = rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w)
@@ -384,14 +407,20 @@ const earned = (w: string): (t: Row) => boolean => {
   }
 }
 
-// What every root's work shares: the owner's channels, schemas, call preconditions, repositories and rhythms, the templates
-// the walk earned, and the templates a standing rhythm names (the walk runs those only when their rhythm is due).
+// What every root's work shares: the owner's configuration (below), the templates the walk earned, and the templates a
+// standing rhythm names (the walk runs those only when their rhythm is due).
+const SHARED_UNTIL_DECLARED = new Set([CHANNEL, SHAPE_SCHEMA, REQUIRES, REPOSITORY, RHYTHM])
 const shared = (w: string): Row[] => {
   const allSels = new Set(rows.filter((r) => r.shape === SELECTION).filter((r) => r.writer === w).map((r) => r.id))
   const ok = earned(w)
   const scheduled = rhythmTemplates()
+  // The owner's configuration: once asks are declared, every owner row that is not one (whatever its shape: a new setting
+  // the walk reads reaches it with no change here); until then, the listed shapes, as before.
+  const declared = askShapes()
+  const config = (r: Row): boolean => r.role === OWNER && r.shape !== ACTIVITY_TEMPLATE &&
+    (declared === undefined ? SHARED_UNTIL_DECLARED.has(r.shape) : !declared.has(r.shape))
   return rows.filter((r) =>
-    (r.role === OWNER && (r.shape === CHANNEL || r.shape === SHAPE_SCHEMA || r.shape === REQUIRES || r.shape === REPOSITORY || r.shape === RHYTHM)) ||
+    config(r) ||
     (r.shape === ACTIVITY_TEMPLATE && (r.role === DESCRIBED || r.role === OWNER) && scheduled.has(r.id)) ||
     (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) && ok(r)))
 }
