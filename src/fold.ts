@@ -387,7 +387,9 @@ export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
     else t.refused[g.refused ?? "other"] = (t.refused[g.refused ?? "other"] ?? 0) + 1
     if (src !== undefined && idx !== undefined && g.ok && kind === "answer" && g.r === 1) {
       const o = idx.byId.get(g.id)
-      const root = String(o?.event_ref ?? "")
+      // The request it graded: the root the producer's vessel stamps from the walk's selection (never the model's), else,
+      // on a grade written before that stamp, the event_ref the model was asked to name.
+      const root = String(o?.root ?? o?.event_ref ?? "")
       const newest = (idx.of.get(root) ?? []).filter((r) => r.seq <= (o?.seq ?? Infinity)).sort((a, b) => b.seq - a.seq)[0]
       const named = newest?.[src.field]
       if (!Array.isArray(named) || named.length === 0) t.untargeted++

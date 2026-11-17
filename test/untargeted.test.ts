@@ -27,12 +27,32 @@ describe("grades with no target", () => {
     return F.tally(rows, seq, seq)
   }
   const target = [{ shape: "uiViewState", where: { region: "landing" } }]
+  // A grade whose model-written event_ref names another row: the stamped root decides which request it graded.
+  const misnamed = (stamped: boolean) => {
+    seq = 0
+    const rows: Row[] = [row("credits", "owner", { target: "selection", w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12 }),
+      row("shape_schema", "owner", { target: "outcome", context: ["answer"], schema: { type: "object", "x-reach": { from: "change_wanted", field: "targets" } } })]
+    const ask = row("world_changed", "person", { what: "q" })
+    const other = row("world_changed", "person", { what: "another" })
+    const answerSel = row("selection", "walk", { arm: "treated", cell: "c", pool_refs: [ask.id] })
+    const outcomeSel = row("selection", "walk", { arm: "treated", cell: "judge" })
+    rows.push(ask, other, answerSel, outcomeSel, row("change_wanted", "described", { wanted: false, input_refs: [ask.id], targets: target }))
+    const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id] })
+    rows.push(answer, row("outcome", "described", { r: 1, event_ref: other.id, ...(stamped ? { root: ask.id } : {}), selection_ref: outcomeSel.id,
+      input_refs: [ask.id, answer.id], evidence_refs: [answer.id] }))
+    return F.tally(rows, seq, seq).untargeted
+  }
 
   test("[MUST-FAIL] a counted model grade of 1 on a request with no target is counted as untargeted while the grader holds to targets", () => {
     expect(build({}).untargeted).toBe(1) // its row names none
     expect(build({ targets: [] }).untargeted).toBe(1) // an empty list names none
     expect(build({ none: true }).untargeted).toBe(1) // no such row at all
     expect(build({ targets: target, late: true }).untargeted).toBe(1) // a target named only after the grade
+  })
+
+  test("[MUST-FAIL] the request a grade judged is its stamped root, not the request its model named", () => {
+    expect(misnamed(true)).toBe(0) // root: the targeted ask
+    expect(misnamed(false)).toBe(1) // before the stamp: the event_ref it named, which has no target
   })
 
   test("[MUST-FAIL] one with a target, or with no reach rule held by the owner, is not", () => {
