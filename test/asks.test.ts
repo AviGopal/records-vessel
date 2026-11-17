@@ -151,6 +151,15 @@ describe("what an ask is, as the owner declares it", () => {
   test("[MUST-FAIL] only ask: true declares; a truthy value of another kind does not", async () => {
     expect(await rootOf([{ shape: "shape_schema", target: "request", inputs: [{ shape: "world_changed", ask: "yes" }] }])).toBe(true)
   })
+  test("[MUST-FAIL] an ask mark naming no shape declares nothing: a person's ask stays a root, and settings follow today's list", async () => {
+    const unnamed = { shape: "shape_schema", target: "request", inputs: [{ ask: true }, { shape: 42, ask: true }] }
+    expect(await rootOf([unnamed])).toBe(true) // undeclared: a setting outside today's list is a root, as before
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, unnamed, owner)
+    const a = await r.ask("a person's ask")
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toContain(a.id)
+  })
   test("[MUST-FAIL] a row of the declared shape written by the walk is no ask: only a person's, the owner's or an operator's", async () => {
     const r = await fresh()
     await r.arm()

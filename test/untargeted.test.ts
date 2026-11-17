@@ -11,18 +11,21 @@ const row = (shape: string, role: string, fields: Record<string, unknown>): Row 
   ({ shape, role, writer: role, id: `${shape}-${++seq}`, seq, t: "", input_refs: [], ...fields }) as Row
 
 describe("grades with no target", () => {
-  const build = (opts: { rule?: boolean | "malformed"; targets?: unknown; late?: boolean; none?: boolean; r?: number; control?: boolean; stale?: boolean; grow?: boolean }) => {
+  const build = (opts: { rule?: boolean | "malformed" | "nofrom"; targets?: unknown; twoRefs?: boolean; late?: boolean; none?: boolean; r?: number; control?: boolean; stale?: boolean; grow?: boolean }) => {
     seq = 0
     const rows: Row[] = [row("credits", "owner", { target: "selection", w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12 })]
     if (opts.rule !== false) rows.push(row("shape_schema", "owner", { target: "outcome", context: ["answer"],
-      schema: { type: "object", "x-reach": { from: "change_wanted", field: opts.rule === "malformed" ? 7 : "targets" } } }))
+      schema: { type: "object", "x-reach": opts.rule === "nofrom" ? { field: "targets" } : { from: "change_wanted", field: opts.rule === "malformed" ? 7 : "targets" } } }))
     const ask = row("world_changed", "person", { what: "q" })
     const answerSel = row("selection", "walk", { arm: "treated", cell: "c", pool_refs: [ask.id] })
     const outcomeSel = row("selection", "walk", { arm: opts.control ? "control" : "treated", cell: "judge" })
     rows.push(ask, answerSel, outcomeSel)
     // an older row naming a target, superseded by a newer one naming none: the newest at the grade decides
     if (opts.stale) rows.push(row("change_wanted", "described", { wanted: false, input_refs: [ask.id], targets: [{ shape: "uiViewState" }] }))
-    const cw = () => row("change_wanted", "described", { wanted: false, input_refs: [ask.id], ...(opts.targets !== undefined ? { targets: opts.targets } : {}) })
+    // a judgment row may cite more than its request (the request and a row it read): each cited id is its own key
+    const other = row("hop", "walk", {})
+    const cw = () => row("change_wanted", "described", { wanted: false, input_refs: opts.twoRefs ? [other.id, ask.id] : [ask.id],
+      ...(opts.targets !== undefined ? { targets: opts.targets } : {}) })
     if (!opts.late && !opts.none) rows.push(cw())
     const answer = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id] })
     rows.push(answer, row("outcome", "described", { r: opts.r ?? 1, event_ref: ask.id, selection_ref: outcomeSel.id, input_refs: [ask.id, answer.id], evidence_refs: [answer.id] }))
@@ -80,6 +83,17 @@ describe("grades with no target", () => {
     expect(build({ rule: "malformed" }).untargeted).toBe(0)
   })
 
+  test("[MUST-FAIL] a reach rule naming no row to read targets from is no rule: nothing counts as untargeted", () => {
+    expect(build({ none: true }).untargeted).toBe(1) // the same grade, under a whole rule, counts
+    expect(build({ rule: "nofrom", none: true }).untargeted).toBe(0)
+  })
+  test("[MUST-FAIL] a judgment row citing its request among other rows still names that request's targets", () => {
+    expect(build({ targets: target, twoRefs: true }).untargeted).toBe(0)
+  })
+  test("[MUST-FAIL] targets that are not a list (null, or a single shape's name) name no target: the grade is untargeted", () => {
+    expect(build({ targets: null }).untargeted).toBe(1)
+    expect(build({ targets: "uiViewState" }).untargeted).toBe(1)
+  })
   test("[MUST-FAIL] one with a target, or with no reach rule held by the owner, is not", () => {
     expect(build({ targets: target }).untargeted).toBe(0)
     expect(build({ rule: false }).untargeted).toBe(0)
