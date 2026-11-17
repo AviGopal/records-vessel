@@ -233,9 +233,24 @@ const openRoots = (w: string): Row[] => {
 // since its last closed row, and the work that cited any of them, so writing the row again never restarts the walk on
 // it. The latest row is the root and says what the gap is now (status, repo, hold). A gap closed and opened again
 // starts a new episode.
-const episodeOf = (root: Row): Row[] => {
-  if (root.shape !== GAP || root.role !== DETECTOR || root.gap_id === undefined) return [root]
-  const same = rows.filter((r) => r.shape === GAP && r.role === DETECTOR && String(r.gap_id) === String(root.gap_id) && r.seq <= root.seq)
+// Every gap root's detector rows, by its gap_id, found in one pass over the store for all the roots of a read.
+const isGapRoot = (root: Row): boolean => root.shape === GAP && root.role === DETECTOR && root.gap_id !== undefined
+const gapRowsOf = (roots: Row[]): Map<string, Row[]> => {
+  const want = new Set(roots.filter(isGapRoot).map((root) => String(root.gap_id)))
+  const out = new Map<string, Row[]>()
+  for (const r of rows) {
+    if (r.shape !== GAP || r.role !== DETECTOR) continue
+    const k = String(r.gap_id)
+    if (!want.has(k)) continue
+    const list = out.get(k)
+    if (list) list.push(r)
+    else out.set(k, [r])
+  }
+  return out
+}
+const episodeOf = (root: Row, gaps: Map<string, Row[]>): Row[] => {
+  if (!isGapRoot(root)) return [root]
+  const same = (gaps.get(String(root.gap_id)) ?? []).filter((r) => r.seq <= root.seq)
     .sort((a, b) => a.seq - b.seq)
   const since = same.filter((r) => r.status !== "open").at(-1)?.seq ?? 0
   return same.filter((r) => r.seq > since)
@@ -262,28 +277,70 @@ const citedBy = (w: string, ids: Set<string>): Map<string, Set<string>> => {
   return out
 }
 
-const rootRows = (w: string, root: Row, cites: Map<string, Set<string>> = citedBy(w, new Set(episodeOf(root).map((r) => r.id)))): Row[] => {
-  const mine = rows.filter((r) => MINE.has(r.shape)).filter((r) => r.writer === w)
-  const episode = episodeOf(root)
-  const ids = new Set(episode.map((r) => r.id))
-  const held = (r: Row): boolean => [...(cites.get(r.id) ?? [])].some((id) => ids.has(id))
-  const sels = new Set(mine.filter((r) => r.shape === SELECTION).filter(held).map((r) => r.id))
-  const keep = new Set([
-    ...episode,
-    ...mine.filter((r) => sels.has(r.shape === SELECTION ? r.id : String(r.selection_ref))),
-    ...rows.filter((r) => r.role === DESCRIBED).filter((r) => r.shape !== ACTIVITY_TEMPLATE).filter((r) => sels.has(String(r.selection_ref))),
-    ...rows.filter((r) => r.role === WALK && r.writer === w).filter((r) => !MINE.has(r.shape)).filter((r) => sels.has(String(r.selection_ref))),
+const into = <K, V>(m: Map<K, V[]>, k: K, v: V): void => {
+  const list = m.get(k)
+  if (list) list.push(v)
+  else m.set(k, [v])
+}
+// The rows descended from each of the given roots, in the roots' order, each root's in store order. Found for all the
+// roots at once in a fixed number of passes over the store (the gap rows, the selections, the rows they hold, the
+// answer), not seven per root: with 41 roots on a 74k-row store, one pass set per root took 8-14 s of every read.
+// Each root's rows are what they were found per root: its episode, the walk's selections citing any of it, their hops
+// and failures, the described rows they made, the walk's other rows recorded under them, the walk's failures citing
+// the root itself, and a person's row citing any of those (one step: a person's row citing only another person's
+// row that joined is not the root's).
+const rootRows = (w: string, roots: Row[]): Row[][] => {
+  const gaps = gapRowsOf(roots)
+  const ofRoot = new Map<string, number[]>()
+  const keep = roots.map((root, i) => {
+    const ids = new Set<string>()
+    for (const r of episodeOf(root, gaps)) {
+      ids.add(r.id)
+      into(ofRoot, r.id, i)
+    }
+    return ids
+  })
+  // The roots each of the walk's selections works: those whose episode holds a row it cites.
+  const bySel = new Map<string, Set<number>>()
+  for (const [sel, got] of citedBy(w, new Set(ofRoot.keys()))) {
+    const at = new Set<number>()
+    for (const id of got) for (const i of ofRoot.get(id) ?? []) at.add(i)
+    if (at.size > 0) bySel.set(sel, at)
+  }
+  const people: Row[] = []
+  for (const r of rows) {
+    const under = (sel: string): void => {
+      for (const i of bySel.get(sel) ?? []) keep[i]!.add(r.id)
+    }
+    if (MINE.has(r.shape) && r.writer === w) under(r.shape === SELECTION ? r.id : String(r.selection_ref))
+    if (r.role === DESCRIBED && r.shape !== ACTIVITY_TEMPLATE) under(String(r.selection_ref))
+    if (r.role === WALK && r.writer === w && !MINE.has(r.shape)) under(String(r.selection_ref))
     // A failure this walk wrote about the root itself, not about a move (no selection_ref: a root that sat with no move
     // is said so, citing the root): the root's too. Without it the root's newest row never moved past it, so the walk
     // said it again every tick, and its producers were never shown it.
-    ...rows.filter((r) => r.shape === FAILURE && r.role === WALK && r.writer === w && r.selection_ref === undefined)
-      .filter((r) => [r.input_refs].flat().some((id) => ids.has(String(id)))),
-  ].map((r) => r.id))
-  // A person's row about anything of this root (a mark on its diff, a grade of its answer, a word on its ask) is the
+    if (r.shape === FAILURE && r.role === WALK && r.writer === w && r.selection_ref === undefined) {
+      for (const id of [r.input_refs].flat()) for (const i of ofRoot.get(String(id)) ?? []) keep[i]!.add(r.id)
+    }
+    if (r.role === PERSON) people.push(r)
+  }
+  // A person's row about anything of a root (a mark on its diff, a grade of its answer, a word on its ask) is the
   // root's too: it cites one of the rows above. Without it the walk never saw the person's verdict a call waited on (a
-  // landing waiting for a person's mark on its diff), and producers were never shown it.
-  for (const r of rows.filter((x) => x.role === PERSON && [x.input_refs].flat().some((id) => keep.has(String(id))))) keep.add(r.id)
-  return rows.filter((r) => keep.has(r.id))
+  // landing waiting for a person's mark on its diff), and producers were never shown it. Decided against the rows above
+  // only, and added after, so a person's row citing another person's row is not the root's for that alone.
+  const held = new Map<string, number[]>()
+  keep.forEach((ids, i) => { for (const id of ids) into(held, id, i) })
+  const joined: Array<[number, string]> = []
+  for (const p of people) {
+    const at = new Set<number>()
+    for (const id of [p.input_refs].flat()) for (const i of held.get(String(id)) ?? []) at.add(i)
+    for (const i of at) joined.push([i, p.id])
+  }
+  for (const [i, id] of joined) keep[i]!.add(id)
+  const answer = new Map<string, number[]>()
+  keep.forEach((ids, i) => { for (const id of ids) into(answer, id, i) })
+  const out = roots.map((): Row[] => [])
+  for (const r of rows) for (const i of answer.get(r.id) ?? []) out[i]!.push(r)
+  return out
 }
 
 // A template is earned, not declared (law 4): it is the walk's to run only when it replays a run that reached. Its own
@@ -348,7 +405,7 @@ const rhythmTemplates = (): Set<string> => {
 
 export const episode = (w: string): Row[] => {
   const [root] = openRoots(w)
-  const keep = new Set([...(root ? rootRows(w, root) : []), ...shared(w)].map((r) => r.id))
+  const keep = new Set([...(root ? rootRows(w, [root])[0]! : []), ...shared(w)].map((r) => r.id))
   return rows.filter((r) => keep.has(r.id))
 }
 
@@ -361,8 +418,8 @@ export const episode = (w: string): Row[] => {
 // to know a shape's name.
 export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => {
   const roots = openRoots(w)
-  const cites = citedBy(w, new Set(roots.flatMap((root) => episodeOf(root).map((r) => r.id))))
-  return { shared: shared(w), roots: roots.map((root) => ({ root, rows: rootRows(w, root, cites), awaits: root.shape !== ARM })) }
+  const found = rootRows(w, roots)
+  return { shared: shared(w), roots: roots.map((root, i) => ({ root, rows: found[i]!, awaits: root.shape !== ARM })) }
 }
 
 // Answers the first row scan finds, rescanning on every write. Given a deadline it answers null at that time and
