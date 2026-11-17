@@ -273,6 +273,11 @@ const rootRows = (w: string, root: Row, cites: Map<string, Set<string>> = citedB
     ...mine.filter((r) => sels.has(r.shape === SELECTION ? r.id : String(r.selection_ref))),
     ...rows.filter((r) => r.role === DESCRIBED).filter((r) => r.shape !== ACTIVITY_TEMPLATE).filter((r) => sels.has(String(r.selection_ref))),
     ...rows.filter((r) => r.role === WALK && r.writer === w).filter((r) => !MINE.has(r.shape)).filter((r) => sels.has(String(r.selection_ref))),
+    // A failure this walk wrote about the root itself, not about a move (no selection_ref: a root that sat with no move
+    // is said so, citing the root): the root's too. Without it the root's newest row never moved past it, so the walk
+    // said it again every tick, and its producers were never shown it.
+    ...rows.filter((r) => r.shape === FAILURE && r.role === WALK && r.writer === w && r.selection_ref === undefined)
+      .filter((r) => [r.input_refs].flat().some((id) => ids.has(String(id)))),
   ].map((r) => r.id))
   // A person's row about anything of this root (a mark on its diff, a grade of its answer, a word on its ask) is the
   // root's too: it cites one of the rows above. Without it the walk never saw the person's verdict a call waited on (a
