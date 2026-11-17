@@ -112,8 +112,22 @@ const failedOf = (seen: Row[], sels: Map<string, Row>): Set<string> => new Set(s
 // template itself in uses passes credit to its mint only when a run of that template, ended well, made a row
 // this produce also consumed (any arm: a run of either arm walks on to its template through its own output anyway; a
 // selection's arm decides whether its own cell is credited, below): naming a plan shown beside the work, without having used a run of it, is no evidence the
-// plan worked. A run's output on another root passes credit as on this one (a plan reused elsewhere is the transfer).
-export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: Row) => boolean): Map<string, number> => {
+// plan worked.
+// WHAT CROSSES TO ANOTHER ROOT'S WORK. An edge from a selection on one root to a row whose producing selection is on
+// another root (today: a run of a plan minted elsewhere, back to its mint): a debit always crosses (a missed deadline
+// always counts, by the owner's ruling, 11-16); credit crosses only from a person's grade (by the owner's ruling,
+// 11-17). A debit is an origination at r 0, whoever gave it (a lapse, a broken promise, a grade of 0). origin: the originating grade's role
+// (by, as on Grade) and its r. Any other r from a promise check or the walk's own grader (a kept promise, a grader's r
+// above 0) stays in its own root's work.
+// A selection with no root is not known to be on another one: the edge is walked as before. A citation alone (uses,
+// with no grade) originates nothing: every walk back starts at a grade.
+// Only PERSON is here. A detector's close does not travel through reached(): it credits the gap's own chain of
+// selections (gapClosuresOf); if it ever travels here, it comes with its own leg. An operator's grade is deliberately
+// absent: its credit stays in its root. A person row written by a peer is the records write-side class
+// (agf_zgb2fw6ifh3f), not handled here.
+const CROSSES = new Set([PERSON])
+export const reached = (index: Index, start: string, t: Travel, origin: { by: string; r: number }, stopAt?: (row: Row) => boolean): Map<string, number> => {
+  const crosses = origin.r === 0 || CROSSES.has(origin.by)
   const { byId, sels, made, inputs, failed } = index
   const okRun = (sid: unknown): Row | undefined => {
     const s = sels.get(String(sid))
@@ -148,6 +162,8 @@ export const reached = (index: Index, start: string, t: Travel, stopAt?: (row: R
         if (stopAt !== undefined && byId.get(x) !== undefined && stopAt(byId.get(x)!)) continue
         const p = byId.get(x)?.selection_ref
         if (typeof p === "string" && String(sels.get(p)?.a ?? "").startsWith("run/") && failed.has(p)) continue // a failed run: a stop
+        const from = sel.root, to = sels.get(String(p))?.root
+        if (!crosses && typeof from === "string" && typeof to === "string" && from !== to) continue // another root's work: a stop
         if (typeof p === "string" && sels.has(p) && !seenSel.has(p) && (sels.get(p)?.seq ?? Infinity) < sel.seq) { seenSel.add(p); next.push(p) }
       }
     }
@@ -261,7 +277,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     // back along consumption (reached), each once at w·gamma^k for its shortest distance k. Never the pool it saw.
     const weights = new Map<string, number>()
     if (ok && s !== undefined) {
-      for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel)) {
+      for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel, { by: String(o.role), r })) {
         if (!treated(id) || failed.has(id)) continue
         const c = String(sels.get(id)?.cell)
         weights.set(c, Math.max(weights.get(c) ?? 0, g))
@@ -317,7 +333,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       : overtaken(ask, at.seq) ? "person_later" : waitingAt(ask, at.seq - 0.5) ? "person_wait" : undefined
     const weights = new Map<string, number>()
     if (refused === undefined && s !== undefined) {
-      for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel)) {
+      for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel, { by: LAPSE, r: 0 })) {
         if (!treated(id) || failed.has(id)) continue
         const c = String(sels.get(id)?.cell)
         weights.set(c, Math.max(weights.get(c) ?? 0, g))
@@ -675,7 +691,7 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       continue
     }
     const weights = new Map<string, number>()
-    for (const [id, g] of reached(idx(), s.id, t)) {
+    for (const [id, g] of reached(idx(), s.id, t, { by: "promise", r })) {
       const x = byId.get(id)
       if (x === undefined || x.shape !== SELECTION || String(x.arm) !== TREATED || failed.has(id)) continue
       weights.set(String(x.cell), Math.max(weights.get(String(x.cell)) ?? 0, g))
@@ -750,7 +766,7 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     // The USER (~16:00Z): "Stop at makers": a landing teaches the steps that made the change, never the graders whose
     // grades a maker read. A grade row (a shape this fold takes grades from) is not walked through: its producer is
     // judged by later person marks on what it graded.
-    for (const [id, g] of reached(idx(), made.id, t, (row) => GRADE_SHAPES.has(String(row.shape)))) {
+    for (const [id, g] of reached(idx(), made.id, t, { by: PERSON, r }, (row) => GRADE_SHAPES.has(String(row.shape)))) {
       const x = byId.get(id)
       if (x === undefined || x.shape !== SELECTION || String(x.arm) !== TREATED || failed.has(id)) continue
       weights.set(String(x.cell), Math.max(weights.get(String(x.cell)) ?? 0, g))

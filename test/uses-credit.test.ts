@@ -11,7 +11,7 @@ const row = (shape: string, role: string, fields: Record<string, unknown>): Row 
   ({ shape, role, writer: role, id: `${shape}-${++seq}`, seq, t: "", input_refs: [], ...fields }) as Row
 const T = { gamma: 0.7, depth: 12 } as any
 
-const chain = (opts: { failed?: boolean; otherRoot?: boolean; uses: "hop" | "template" | "both" }) => {
+const chain = (opts: { failed?: boolean; otherRoot?: boolean; uses: "hop" | "template" | "both"; by?: string }) => {
   seq = 0
   const schema = row("shape_schema", "owner", { target: "answer", inputs: ["world_changed"] })
   const ask = row("world_changed", "person", { what: "q" })
@@ -25,24 +25,28 @@ const chain = (opts: { failed?: boolean; otherRoot?: boolean; uses: "hop" | "tem
   const uses = opts.uses === "hop" ? [hop.id] : opts.uses === "template" ? [tpl.id] : [hop.id, tpl.id]
   const answer = row("answer", "described", { text: "t", selection_ref: ansSel.id, input_refs: [ask.id, hop.id, tpl.id], uses })
   const rows = [schema, ask, other, mintSel, tpl, runSel, hop, ...fail, ansSel, answer]
-  return { got: F.reached(F.indexOf(rows), ansSel.id, T), runSel, mintSel }
+  return { got: F.reached(F.indexOf(rows), ansSel.id, T, { by: opts.by ?? "person", r: 1 }), runSel, mintSel }
 }
 const has = (m: Map<string, number>, id: string) => m.has(id)
 
 describe("uses credits a run only when it ended well", () => {
-  test("[MUST-FAIL] an ok run's output credits the run and its template's mint", () => {
+  test("[GUARD] an ok run's output credits the run and its template's mint", () => {
     const c = chain({ uses: "hop" })
     expect([c.got.get(c.runSel.id), c.got.get(c.mintSel.id)]).toEqual([0.7, 0.7 * 0.7])
   })
-  test("[MUST-FAIL] a failed run's output credits neither the run nor its mint (a stop)", () => {
+  test("[GUARD] a failed run's output credits neither the run nor its mint (a stop)", () => {
     const c = chain({ uses: "hop", failed: true })
     expect([has(c.got, c.runSel.id), has(c.got, c.mintSel.id)]).toEqual([false, false])
   })
-  test("[MUST-FAIL] another root's ok run output credits both (a plan reused elsewhere is the transfer)", () => {
+  test("[GUARD] another root's ok run output credits both for a person's grade (a plan reused elsewhere is the transfer)", () => {
     const c = chain({ uses: "hop", otherRoot: true })
     expect([has(c.got, c.runSel.id), has(c.got, c.mintSel.id)]).toEqual([true, true])
   })
-  test("[MUST-FAIL] a template named with no ok run of it consumed credits its mint nothing; with one, it does", () => {
+  test("[GUARD] for the walk's own grader's r 1, a run on another root is that root's work: neither it nor the mint behind it", () => {
+    const c = chain({ uses: "hop", otherRoot: true, by: "described" })
+    expect([has(c.got, c.runSel.id), has(c.got, c.mintSel.id)]).toEqual([false, false])
+  })
+  test("[GUARD] a template named with no ok run of it consumed credits its mint nothing; with one, it does", () => {
     const shownOnly = chain({ uses: "template" })
     expect(has(shownOnly.got, shownOnly.mintSel.id)).toBe(false)
     const failedRun = chain({ uses: "both", failed: true })
