@@ -252,9 +252,21 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // installed); this is the same rule where grades count, for one the grader judges anyway. A person's grade is never
   // exempt. With no deadline row for the ask the promise stays exempt from the grader; the promise rule (kept or broken
   // within the owner's window) still grades it where a change was wanted.
-  const firstDeadline = (ask: string): number | undefined => seen
-    .filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number" && refsOf(r).includes(ask))
-    .sort((a, b) => a.seq - b.seq)[0]?.at as number | undefined
+  // Each ask's first deadline row, found in one pass over the rows when first asked, not a pass (and a sort) per call:
+  // the lowest seq, and on an equal seq the row earlier in the list, as the stable sort chose.
+  let deadlines: Map<string, Row> | undefined
+  const deadlinesOf = (): Map<string, Row> => {
+    const first = new Map<string, Row>()
+    for (const r of seen) {
+      if (r.role !== DESCRIBED || typeof r.within_ms !== "number" || typeof r.at !== "number") continue
+      for (const ask of refsOf(r)) {
+        const had = first.get(ask)
+        if (had === undefined || r.seq < had.seq) first.set(ask, r)
+      }
+    }
+    return first
+  }
+  const firstDeadline = (ask: string): number | undefined => (deadlines ??= deadlinesOf()).get(ask)?.at as number | undefined
   const exempt = (o: Row, j: Row | undefined): boolean => {
     if (o.role === PERSON || j === undefined || !promises(seen, j)) return false
     const asks = refsOf(j).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
