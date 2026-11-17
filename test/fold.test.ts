@@ -457,6 +457,13 @@ describe("a detector closing a gap", () => {
     expect(F.tally(rows, rows.length, rows.length).counted.detector).toBe(1)
   })
 
+  test("[MUST-FAIL] a detector's closing is no grade of an answer: never counted as one given with no target", () => {
+    const reach = () => at("shape_schema", "owner", { target: "outcome", schema: { type: "object", "x-reach": { from: "change_wanted", field: "targets" } } })
+    const rows = build([rule, reach, gapRow("open"), sel("ask"), sel("land"), call("land_it"), gapRow("closed")])
+    const t = F.tally(rows, rows.length, rows.length)
+    expect([t.counted.detector, t.untargeted]).toEqual([1, 0])
+  })
+
   test("[MUST-FAIL] a closing's credit is scaled by the owner's w_close", () => {
     const weighed = () => at("credits", "owner", { target: "selection", w_person: 1, w_lapse: 1, w_close: 2, gamma: 0.7, depth: 12 })
     const rows = build([rule, weighed, gapRow("open"), sel("ask"), sel("land"), call("land_it"), gapRow("closed")])

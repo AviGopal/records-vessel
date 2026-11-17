@@ -131,4 +131,34 @@ describe("what an ask is, as the owner declares it", () => {
     expect(ids(all.shared).sort()).toEqual([ch.id, schema.id, req.id, repo.id].sort())
     expect([credits.id, desc.id, mark.id].filter((id) => ids(all.shared).includes(id))).toEqual([])
   })
+
+  // Which schema declares, and what a declaration is: the newest owner schema of each target and variant, its inputs
+  // entry with ask exactly true; and only a person's, the owner's or an operator's row of the declared shape is an ask.
+  const rootOf = async (schemas: Array<Record<string, unknown>>) => {
+    const r = await fresh()
+    await r.arm()
+    for (const s of schemas) await r.write(NODE_KEY, s, owner)
+    const rule = await r.write(NODE_KEY, { shape: "stall_rule", after_rows: 240 }, owner)
+    return (await r.episodes()).roots.map((x) => x.root.id).includes(rule.id)
+  }
+  test("[MUST-FAIL] the newest schema of a target decides: a later request schema with no mark leaves asks undeclared", async () => {
+    expect(await rootOf([ASK_MARK])).toBe(false) // declared: a setting is no root
+    expect(await rootOf([ASK_MARK, { shape: "shape_schema", target: "request", inputs: ["world_changed"] }])).toBe(true)
+  })
+  test("[MUST-FAIL] a variant is its own schema: a newer variant without the mark does not undeclare the plain one", async () => {
+    expect(await rootOf([ASK_MARK, { shape: "shape_schema", target: "request", variant: "gap", inputs: ["gap"] }])).toBe(false)
+  })
+  test("[MUST-FAIL] only ask: true declares; a truthy value of another kind does not", async () => {
+    expect(await rootOf([{ shape: "shape_schema", target: "request", inputs: [{ shape: "world_changed", ask: "yes" }] }])).toBe(true)
+  })
+  test("[MUST-FAIL] a row of the declared shape written by the walk is no ask: only a person's, the owner's or an operator's", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, ASK_MARK, owner)
+    const byWalk = await r.write(NODE_KEY, { shape: "world_changed", what: "the walk's own" }, walk)
+    const person = await r.ask("a person's ask")
+    const roots = (await r.episodes()).roots.map((x) => x.root.id)
+    expect(roots).toContain(person.id)
+    expect(roots).not.toContain(byWalk.id)
+  })
 })
