@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK , INFRA_WINDOW, PERSON_WAIT } from "./shapes"
+import { declaredAsks, isAsk } from "./asks"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -200,6 +201,8 @@ export const reached = (index: Index, start: string, t: Travel, origin: { by: st
 const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const byId = new Map(seen.map((r) => [r.id, r]))
+  // what an ask is, as the rows it is read at declare it (asks.ts): a person's grade is never one
+  const declared = declaredAsks(seen)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const treated = (id: unknown): boolean => String(sels.get(String(id))?.arm) === TREATED
   // A selection whose move failed produced nothing a grade can be crediting, so it is left out of every chain.
@@ -269,7 +272,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const firstDeadline = (ask: string): number | undefined => (deadlines ??= deadlinesOf()).get(ask)?.at as number | undefined
   const exempt = (o: Row, j: Row | undefined): boolean => {
     if (o.role === PERSON || j === undefined || !promises(seen, j)) return false
-    const asks = refsOf(j).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
+    const asks = refsOf(j).filter((id) => isAsk(byId.get(id), declared))
     return asks.length > 0 && asks.every((ask) => { const at = firstDeadline(ask); return at === undefined || at > Date.parse(String(o.t)) })
   }
   const credit = (o: Row): Grade => {
@@ -344,7 +347,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     return timeline[lo]
   }
   const counted = new Set(real.filter((g) => g.ok).map((g) => g.judged))
-  const asksOf = (r: Row | undefined): string[] => refsOf(r).filter((id) => GIVEN.has(String(byId.get(id)?.role)))
+  const asksOf = (r: Row | undefined): string[] => refsOf(r).filter((id) => isAsk(byId.get(id), declared))
   // the asks a written grade already closed, as closed() and lapsed() read them: a person's Right on a result (not on a
   // promise: "Accurate, not done"), or a counted written lapse on any of its deadlines. Found once. A derived lapse on
   // such an ask would only add a second debit for the same miss (database: 5 asks closed by written lapses).

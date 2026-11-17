@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
+import { declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
 import { LAPSE, blames, grades, openPersonWaits, promises, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT,
@@ -31,10 +32,6 @@ export type Query = {
   limit?: number
 }
 
-const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW, HOLD_FACT])
-// Whose rows are asks and what the walk answers (the roots, what wakes a wait, whose deadlines lapse): a person's, the
-// owner's, and an operator's. Only a person's are verdicts (closed, earned, below).
-const EXO_ROLES = new Set([PERSON, OWNER, OPERATOR])
 const MINE = new Set([SELECTION, HOP, FAILURE])
 const FILE = join(DATA_DIR, "rows")
 
@@ -138,11 +135,6 @@ export const read = (q: Query): Row[] => {
   return out
 }
 
-// A template is configuration whoever wrote it (the owner seeds a rhythm's; the walk's plan writers write their own), never
-// an ask.
-const exogenous = (from: Row[]): Row[] =>
-  from.filter((r) => EXO_ROLES.has(r.role)).filter((r) => !OWNER_SHAPES.has(r.shape) && r.shape !== ACTIVITY_TEMPLATE)
-
 // A request is closed when a grade that stands says how it ended (fold.ts standing, the fold's own predicate: of a
 // writer's grades of one answer only the latest stands): DONE by a
 // person's verdict at r 1 on an answer to it that claims the result (not one that promises the next act: fold.ts
@@ -215,37 +207,13 @@ const openGaps = (from: Row[]): Row[] => {
   return [...latest.values()].filter((r) => r.status === "open" && !held(r) && !notRunnable(r) && !notWalkable(r))
 }
 
-// A row that carries a verdict (r 0 or 1 on rows it cites) judges something: it is a grade, whatever its shape, not a
-// request. A person's verdict on a change (a land_verdict citing its diff) is one; were it a root, nothing would ever
-// close it, since what closes a request is a grade of an answer to it.
-const verdict = (r: Row): boolean => (r.r === 0 || r.r === 1) && [r.input_refs].flat().filter((x) => x !== undefined).length > 0
-
-// WHAT AN ASK IS, AS THE OWNER DECLARES IT (the USER, 11-17: "Approve"): a shape some owner schema marks as the input it
-// answers (an inputs entry {shape, ask: true}: the request schema's world_changed). Read from the newest owner schema of
-// each target and variant, so nothing here names a shape. Once any is declared, a root is an exogenous row of a declared
-// ask shape, and every other owner row is the owner's configuration, shared with the walk. With none declared, today's
-// rule holds: any exogenous row of a shape outside the owner's configuration list opens a root, and only the listed
-// shapes are shared.
-const askShapes = (): Set<string> | undefined => {
-  const newest = new Map<string, Row>()
-  for (const r of rows.filter((x) => x.shape === SHAPE_SCHEMA && x.role === OWNER).sort((a, b) => a.seq - b.seq)) {
-    newest.set(`${String(r.target)}|${String(r.variant ?? "")}`, r)
-  }
-  const out = new Set<string>()
-  for (const s of newest.values()) {
-    for (const e of [s.inputs ?? []].flat()) {
-      const o = typeof e === "object" && e !== null ? e as { shape?: unknown; ask?: unknown } : undefined
-      if (o?.ask === true && typeof o.shape === "string") out.add(o.shape)
-    }
-  }
-  return out.size > 0 ? out : undefined
-}
-const asks = (from: Row[], declared: Set<string> | undefined): Row[] => declared === undefined ? exogenous(from)
-  : from.filter((r) => EXO_ROLES.has(r.role) && declared.has(r.shape))
+// The asks the owner declares (asks.ts declaredAsks), over the whole store.
+const askShapes = (): Set<string> | undefined => declaredAsks(rows)
 
 const openRoots = (w: string): Row[] => {
   const done = closed()
-  const open = [...asks(rows, askShapes()).filter((r) => r.shape !== OUTCOME).filter((r) => !verdict(r)).filter((r) => !done.has(r.id)), ...openGaps(rows)]
+  const declared = askShapes()
+  const open = [...rows.filter((r) => isAsk(r, declared)).filter((r) => !done.has(r.id)), ...openGaps(rows)]
     .sort((a, b) => a.seq - b.seq)
   if (open.length > 0) return open
   const arms = rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w)
@@ -506,8 +474,8 @@ export const lastSeq = (): number => seq
 // so a grader of one request is never shown another's lapse.
 export const lapsed = (deadlineShape: string, _answerShape: string, now: number, of?: string[]): Row[] => {
   const byId = new Map(rows.map((r) => [r.id, r]))
-  const exo = new Set(exogenous(rows).map((r) => r.id))
-  const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => exo.has(id))
+  const declared = askShapes()
+  const asks = (r: Row): string[] => [r.input_refs].flat().map(String).filter((id) => isAsk(byId.get(id), declared))
   // what a written grade judged or closed: the fold's own derived lapses (fold.ts LAPSE) are what this lists, by the wall
   // clock, so they neither hide it nor close the ask here
   // and a grade a model wrote of a deadline, which counts for nothing (fold.ts by_rule) but was written: listed again, the

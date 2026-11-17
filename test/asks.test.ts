@@ -171,3 +171,50 @@ describe("what an ask is, as the owner declares it", () => {
     expect(roots).not.toContain(byWalk.id)
   })
 })
+
+describe("the lapsed read takes asks by the same predicate as the roots", () => {
+  // the due context's form: the request's own first due an hour ahead, an answer, the person's Wrong of it, and a later
+  // due citing the request and that Wrong, with a window that passes
+  const wrongCited = async (r: Awaited<ReturnType<typeof fresh>>, ask: { id: string }) => {
+    const sel = await r.select(ask.id)
+    await r.write(NODE_KEY, { shape: "due", within_ms: 3_600_000, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const wrong = await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [answer.id] })
+    return r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id, wrong.id] }, desc)
+  }
+  test("[MUST-FAIL] a person's Wrong cited by a later due is no ask: nothing lapses before the request's own first deadline", async () => {
+    const r = await fresh()
+    const ask = await r.ask("q")
+    await wrongCited(r, ask)
+    await Bun.sleep(20)
+    expect(await r.lapsed()).toEqual([])
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toContain(ask.id)
+  })
+  test("[MUST-FAIL] past both, a due citing [ask, person's Wrong] is not listed: only the request's own first deadline is", async () => {
+    const r = await fresh()
+    const ask = await r.ask("q")
+    const sel = await r.select(ask.id)
+    const first = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const wrong = await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [answer.id] })
+    await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id, wrong.id] }, desc)
+    await Bun.sleep(20)
+    expect(await r.lapsed()).toEqual([first.id])
+  })
+  test("[MUST-FAIL] once asks are declared, a person's row of another shape is no ask: its deadline is not listed", async () => {
+    const r = await fresh()
+    await r.write(NODE_KEY, ASK_MARK, owner)
+    const note = await r.write(PERSON_KEY, { shape: "note", what: "x" })
+    await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: (await r.select(note.id)).id, input_refs: [note.id] }, desc)
+    await Bun.sleep(20)
+    expect(await r.lapsed()).toEqual([])
+  })
+  test("[GUARD] a declared ask's own first deadline is still listed once it passes", async () => {
+    const r = await fresh()
+    await r.write(NODE_KEY, ASK_MARK, owner)
+    const ask = await r.ask("q")
+    const due = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: (await r.select(ask.id)).id, input_refs: [ask.id] }, desc)
+    await Bun.sleep(20)
+    expect(await r.lapsed()).toEqual([due.id])
+  })
+})
