@@ -76,7 +76,7 @@ describe("what an ask is, as the owner declares it", () => {
     expect(ids(all.shared)).toContain(seeded.id)
   })
 
-  test("[MUST-FAIL] an owner's world_changed is an ask: a root, and not shared with every other root", async () => {
+  test("[GUARD] an owner's world_changed is an ask: a root, and not shared with every other root", async () => {
     const r = await fresh()
     await r.arm()
     await r.write(NODE_KEY, ASK_MARK, owner)
@@ -88,7 +88,19 @@ describe("what an ask is, as the owner declares it", () => {
     expect(ids(all.shared)).not.toContain(person.id)
   })
 
-  test("[MUST-FAIL] a person's outcome is neither a root nor shared", async () => {
+  test("[MUST-FAIL] once asks are declared, an owner's template no rhythm names is not shared: templates keep their own rules", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.write(NODE_KEY, ASK_MARK, owner)
+    const tmpl = await r.write(NODE_KEY, { shape: "activity_template", calls: [{ shape: "x" }] }, owner)
+    const rule = await r.write(NODE_KEY, { shape: "stall_rule", after_rows: 240 }, owner)
+    const all = await r.episodes()
+    expect(ids(all.shared)).toContain(rule.id) // a setting is shared
+    expect(ids(all.shared)).not.toContain(tmpl.id) // an unscheduled owner template is not
+    expect(all.roots.map((x) => x.root.id)).not.toContain(tmpl.id)
+  })
+
+  test("[GUARD] a person's outcome is neither a root nor shared", async () => {
     const r = await fresh()
     await r.arm()
     await r.write(NODE_KEY, ASK_MARK, owner)
