@@ -84,3 +84,27 @@ describe("qa: a stall row in the root's episode", () => {
     expect(all.roots.find((x) => x.root.id === b.id)?.rows.map((x) => x.id)).toContain(st.id)
   })
 })
+
+describe("a held request's skip row on a root with no move, in the root's episode", () => {
+  // The walk writes it for a root that offered no move this tick: no selection_ref, citing the root and the held request.
+  // In the root's rows it is the root's newest row, so the walk's next ticks read it as said (written once per reason), and
+  // the root's producers are handed it with the root's other rows.
+  test("is among its root's rows, and not another root's", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const b = await r.ask("make another change")
+    const sa = await r.select(a.id)
+    await r.select(b.id)
+    const req = await r.write(NODE_KEY, { shape: "request", pointer: { type: "git_land" }, selection_ref: sa.id, input_refs: [a.id] }, desc)
+    expect(req.id).toBeDefined()
+    const skip = await r.write(NODE_KEY, { shape: "failure", kind: "skip", request_ref: req.id, unserved: ["git_land (requires land_verdict)"],
+      input_refs: [a.id, req.id] }, walk)
+    expect(skip.id).toBeDefined()
+    const all = await r.episodes()
+    const rowsOf = (id: string) => all.roots.find((x) => x.root.id === id)?.rows.map((x) => x.id) ?? []
+    expect(rowsOf(a.id)).toContain(skip.id)
+    expect(rowsOf(a.id)).toContain(req.id)
+    expect(rowsOf(b.id)).not.toContain(skip.id)
+  })
+})
