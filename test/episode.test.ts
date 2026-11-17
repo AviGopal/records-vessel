@@ -996,6 +996,22 @@ describe("what the walk does not read back of its own rows", () => {
     expect(noCost(thin).length).toBeLessThan(noCost(plain).length / 10)
   })
 
+  test("[MUST-FAIL] a row every root is given (shared) that the reader wrote itself is thinned there too; another writer's stays whole", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const sel = await r.write(NODE_KEY, realSelection(a.id, 3), walk)
+    // templates a rhythm schedules (store.ts shared()): one written under the reader's own name, one a producer's
+    const plan = { shape: "activity_template", name: "read-then-answer", calls: [{ shape: "fs_read", path: "README.md" }], selection_ref: sel.id }
+    const own = await r.write(NODE_KEY, plan, { writer: WALK, role: "described" })
+    const theirs = await r.write(NODE_KEY, { ...plan, name: "nightly" }, desc)
+    for (const t of [own, theirs]) await r.write(NODE_KEY, { shape: "rhythm", template: t.id, every_ms: 3_600_000 }, owner)
+    const thin = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: { ...OMIT, activity_template: ["calls"] } })) as any
+    const got = (id: string) => thin.shared.find((x: { id: string }) => x.id === id)
+    expect([got(own.id)?.fields_omitted, got(own.id)?.calls, got(own.id)?.name]).toEqual([["calls"], undefined, "read-then-answer"])
+    expect([got(theirs.id)?.fields_omitted, got(theirs.id)?.calls]).toEqual([undefined, plan.calls])
+  })
+
   test("[MUST-FAIL] the stored rows stay whole: a read by id and a read without omit after a read with it carry every field", async () => {
     const r = await fresh()
     await r.arm()

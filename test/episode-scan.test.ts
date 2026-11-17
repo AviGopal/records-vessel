@@ -97,7 +97,7 @@ describe("what the episode read costs", () => {
 // text, an ask's what, a grade's r), and a shape and a field no row has.
 const WALKER = "walk-1"
 const WALK_OMIT = { selection: ["cands", "posts", "timing"] }
-const WIDE_OMIT = { selection: ["cands", "posts", "timing", "cands"], failure: ["selection_ref"], answer: ["text"], world_changed: ["what"], outcome: ["r"], hop: ["no_such_field"], no_such_shape: ["id"] }
+const WIDE_OMIT = { selection: ["cands", "posts", "timing", "cands"], failure: ["selection_ref"], answer: ["text"], world_changed: ["what"], outcome: ["r"], activity_template: ["calls"], hop: ["no_such_field"], no_such_shape: ["id"] }
 type Answer = { shared: Array<Record<string, unknown>>; roots: Array<{ root: Record<string, unknown>; rows: Array<Record<string, unknown>>; awaits: boolean }> }
 // The answer as it must be with omit: exactly the named fields gone from exactly this walker's rows of the named shapes,
 // marked with the ones each row had, and every other row, root and flag as the no-omit answer has them.
@@ -153,6 +153,10 @@ describe("the episodes read leaves out what its reader names of its own rows", (
       }
     }
     expect(kept).toBeGreaterThan(0)
+    // a shared row the reader wrote itself (a template a rhythm schedules) is thinned in shared too; another writer's is whole
+    const templates = got.flatMap((p) => p.thin.shared).filter((r) => r.shape === "activity_template")
+    expect(templates.filter((r) => r.writer === WALKER).map((r) => [r.fields_omitted, "calls" in r])).toContainEqual([["calls"], false])
+    expect(templates.filter((r) => r.writer !== WALKER).map((r) => [r.fields_omitted, "calls" in r])).toContainEqual([undefined, true])
     // a grade keeps its standing, a held gap its fact
     expect(thin.some((r) => r.shape === "outcome" && r.standing !== undefined)).toBe(true)
     expect(thin.some((r) => r.shape === "gap" && JSON.stringify(r).includes("read_as_fact"))).toBe(true)

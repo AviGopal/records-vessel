@@ -257,6 +257,12 @@ export const walked = (): Row[] => {
   hop(sg, "w2", "started", "git_diff")
   add({ shape: "failure", kind: "stall", root: d.id, rows: 50, since_seq: 3, input_refs: [d.id] }, walk)
   realSelection(add, g.id, 2, other)
+  // templates a rhythm schedules, so every root is given them (shared): one the walker wrote itself, under its own name as
+  // writer, and one a producer wrote
+  const own = add({ shape: "activity_template", name: "read-then-answer", calls: [{ shape: "fs_read" }], selection_ref: s1.id }, { writer: WALKER, role: "described" })
+  const theirsT = add({ shape: "activity_template", name: "nightly", calls: [{ shape: "fs_read" }], selection_ref: s1.id }, desc)
+  add({ shape: "rhythm", template: own.id, every_ms: 3_600_000 }, owner)
+  add({ shape: "rhythm", template: theirsT.id, every_ms: 86_400_000 }, owner)
   void old
   void theirs
   return rows
