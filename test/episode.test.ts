@@ -1012,6 +1012,53 @@ describe("what the walk does not read back of its own rows", () => {
     expect([got(theirs.id)?.fields_omitted, got(theirs.id)?.calls]).toEqual([undefined, plan.calls])
   })
 
+  test("[MUST-FAIL] an omit that is not an object (a number, a boolean) is refused on the episodes read, naming it", async () => {
+    const r = await fresh()
+    await r.arm()
+    await r.ask("make a change")
+    for (const bad of [5, true, 0, false, "x"]) {
+      const got = await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: bad })
+      expect([bad, got.failure?.status, String(got.failure?.body).includes("omit")]).toEqual([bad, 400, true])
+    }
+  })
+
+  // omit is the episodes read's alone: a query that names episode and roots "all" but also what makes it another read
+  // (the head, one root's calls, one call, the walker's calls of some types) is answered as that read, never refused for
+  // an omit it does not take.
+  test("[GUARD] beside episode and roots all, a head, root calls, call or calls read answers as it does without omit, not the omit refusal", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const sel = await r.write(NODE_KEY, realSelection(a.id, 2), walk)
+    await r.write(NODE_KEY, { shape: "hop", phase: "started", call_id: "c1", pointer_type: "fs_read", kind: "call", selection_ref: sel.id }, walk)
+    const rows = [
+      { head: true }, { root: a.id, calls: "all" }, { call_id: "c1" }, { calls: ["fs_read"] },
+    ]
+    for (const q of rows) {
+      const want = await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", ...q })
+      const got = await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", ...q, omit: 5 })
+      expect([q, got.failure, JSON.stringify(got)]).toEqual([q, undefined, JSON.stringify(want)])
+    }
+  })
+
+  test("[MUST-FAIL] the reader's own row of a shape named like an object's own property (constructor, toString) is answered whole, and the read is not broken by it", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("make a change")
+    const sel = await r.write(NODE_KEY, realSelection(a.id, 2), walk)
+    const odd = []
+    for (const shape of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      const w = await r.write(NODE_KEY, { shape, cands: [1], note: shape, selection_ref: sel.id, input_refs: [a.id] }, walk)
+      if (w.id !== undefined) odd.push(w)
+    }
+    expect(odd.map((w) => w.shape)).toEqual(expect.arrayContaining(["constructor", "toString"]))
+    const thin = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", omit: OMIT })) as any
+    expect(thin.failure).toBeUndefined()
+    const got = (id: string) => thin.roots[0].rows.find((x: { id: string }) => x.id === id)
+    for (const w of odd) expect([w.shape, got(w.id)?.cands, got(w.id)?.fields_omitted]).toEqual([w.shape, [1], undefined])
+    expect(got(sel.id)?.fields_omitted).toEqual(["cands", "posts", "timing"]) // the same answer thins the selection
+  })
+
   test("[MUST-FAIL] the stored rows stay whole: a read by id and a read without omit after a read with it carry every field", async () => {
     const r = await fresh()
     await r.arm()
