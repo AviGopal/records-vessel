@@ -23,6 +23,7 @@ const KEYS: Record<string, { keyId: string; ownerKind: string; userId?: string }
   "person-emptyuser-key": { keyId: "kid-emptyuser", ownerKind: "person", userId: "" },
   "person-numuser-key": { keyId: "kid-numuser", ownerKind: "person", userId: 7 as unknown as string },
   "person-sevenuser-key": { keyId: "kid-sevenuser", ownerKind: "person", userId: "7" },
+  "person-moved-key": { keyId: "kid-moved", ownerKind: "person", userId: "user:before" },
   "operator-key": { keyId: "kid-operator", ownerKind: "operator", userId: "user:fixture-a" },
 }
 // on-behalf-of tokens identity minted: the caller's key, its class, its user
@@ -188,5 +189,24 @@ describe("a person's row carries the user identity names for its key", () => {
     // the string names the stamped user, and a number still names a number
     expect((await s.states({ asker_user: "7" })).map((r) => r.root)).toEqual([b.id])
     expect((await s.states({ seq: b.seq })).map((r) => r.root)).toEqual([b.id])
+  })
+
+  test("[MUST-FAIL] a person's write in a burst is stamped from identity's answer now, for its own key, never a kept read's", async () => {
+    const s = await fresh()
+    // a read keeps the key's answer, naming the user identity says now
+    await s.call("ApiKey person-moved-key", { type: "record_read", shape: "ask_state" })
+    KEYS["person-moved-key"]!.userId = "user:after"
+    try {
+      const burst = await Promise.all([
+        ...[0, 1, 2, 3, 4].map((i) => s.write("person-moved-key", { shape: "world_changed", what: `moved ${i}` })),
+        ...[0, 1, 2, 3, 4].map((i) => s.write("person-other-key", { shape: "world_changed", what: `other ${i}` })),
+        ...[0, 1, 2].map(() => s.call("ApiKey person-moved-key", { type: "record_read", shape: "ask_state" })),
+      ])
+      const rows = await Promise.all(burst.slice(0, 10).map((r) => s.byId(r.id)))
+      expect(rows.map((r) => [r.writer, r.user_id])).toEqual([
+        ...Array(5).fill(["kid-moved", "user:after"]), ...Array(5).fill(["kid-other", "user:fixture-b"])])
+    } finally {
+      KEYS["person-moved-key"]!.userId = "user:before"
+    }
   })
 })
