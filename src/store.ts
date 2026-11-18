@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
 import { declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
-import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, promises, standing } from "./fold"
+import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE,
 } from "./shapes"
@@ -581,7 +581,8 @@ export const rootCalls = (root: string, output = true): Call[] => {
 //   waiting_on_you: the person_wait on its root now (openPersonWaits): that row's id, the failure it cites, and the tree,
 //                   repo and time it states.
 // A gap is no ask (no person asked it), so it has no ask_state. Facts only: read from rows present, nothing is written,
-// and no grade or credit reads it. Records refuses a stored one.
+// and no grade or credit reads it. Records refuses a stored one. Its seq and t are the newest stored row its facts are
+// derived from (below); ask_seq and ask_t are the ask's own, and rows sort by them, oldest ask first.
 const deriveAskStates = (): Row[] => {
   const declared = askShapes()
   const done = closed()
@@ -611,6 +612,63 @@ const deriveAskStates = (): Row[] => {
     if (own !== undefined) answered.set(own, r.id)
   }
   const waits = new Map(openPersonWaits(rows).map((p) => [String(p.root), p]))
+  // THE NEWEST ROW EACH ASK'S FACTS ARE DERIVED FROM, so a reader learns a row is news from its seq and t, never by
+  // working newness out itself. A state ending is news too, so the rows that end one count. The rows, per ask:
+  //   the ask itself;
+  //   each selection whose root is the ask;
+  //   each call started under such a selection: its started hop, and its ended hop or failure when it has one; and when
+  //     it has neither and its walker made a newer selection (callsOf: only a call under the walker's newest selection is
+  //     in flight), the first such selection, which is what ended it; never a newer selection that ended no call of it;
+  //   each answer whose own root is the ask (the newest answer is among them);
+  //   the root's latest wait on a person (a walk failure saying waits_for person, its selection's root the ask), and the
+  //     first person row about the root after it (personWait's reading), which ended it.
+  const news = new Map<string, Row>()
+  const note = (root: string, r: Row | undefined): void => {
+    if (r === undefined || !open.has(root)) return
+    const n = news.get(root)
+    if (n === undefined || r.seq > n.seq) news.set(root, r)
+  }
+  for (const a of asks) note(a.id, a)
+  for (const sel of sels) note(String(sel.root), sel)
+  for (const w of new Set(sels.map((r) => String(r.writer)))) {
+    const mine = rows.filter((r) => MINE.has(r.shape) && r.writer === w)
+    const wsels = mine.filter((r) => r.shape === SELECTION)
+    const ownSels = new Map(wsels.map((r) => [r.id, r]))
+    const firstBy = (shape: string, phase?: string): Map<string, Row> => {
+      const m = new Map<string, Row>()
+      for (const r of mine) if (r.shape === shape && (phase === undefined || r.phase === phase) && !m.has(String(r.call_id))) m.set(String(r.call_id), r)
+      return m
+    }
+    const ended = firstBy(HOP, "ended")
+    const failed = firstBy(FAILURE)
+    for (const h of mine.filter((r) => r.shape === HOP && r.phase === "started")) {
+      const sel = ownSels.get(String(h.selection_ref))
+      if (sel === undefined) continue
+      const root = String(sel.root)
+      const id = String(h.call_id)
+      note(root, h)
+      note(root, ended.get(id))
+      note(root, failed.get(id))
+      if (!ended.has(id) && !failed.has(id)) note(root, wsels.find((x) => x.seq > sel.seq))
+    }
+  }
+  for (const r of rows) {
+    if (r.role !== DESCRIBED || !evidence.has(r.shape)) continue
+    const own = ownRoot(r)
+    if (own !== undefined) note(own, r)
+  }
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const { persons, about } = personWait(rows, byId)
+  const lastWait = new Map<string, Row>()
+  for (const f of rows) {
+    if (f.shape !== FAILURE || f.role !== WALK || f.waits_for !== "person") continue
+    const root = String(byId.get(String(f.selection_ref))?.root)
+    if (open.has(root)) lastWait.set(root, f)
+  }
+  for (const [root, f] of lastWait) {
+    note(root, f)
+    note(root, persons.find((x) => x.seq > f.seq && about(x, root)))
+  }
   return asks.map((a) => {
     const p = waits.get(a.id)
     const calls = working.get(a.id)
@@ -618,13 +676,13 @@ const deriveAskStates = (): Row[] => {
     return {
       shape: ASK_STATE, id: `${ASK_STATE}:${a.id}`, writer: "records", role: "records", root: a.id, asker: a.writer, asker_role: a.role,
       asker_user: a.role === PERSON && typeof a[USER_ID] === "string" ? a[USER_ID] : null,
-      seq: a.seq, t: a.t, input_refs: [a.id],
+      seq: news.get(a.id)!.seq, t: news.get(a.id)!.t, ask_seq: a.seq, ask_t: a.t, input_refs: [a.id],
       ...(picked.has(a.id) ? {} : { waiting_pick: true }),
       ...(calls !== undefined ? { working: calls } : {}),
       ...(answer !== undefined ? { answered: answer } : {}),
       ...(p !== undefined ? { waiting_on_you: { person_wait: p.id, failure: [p.input_refs].flat()[0], tree: p.tree, repo: p.repo, t: p.t } } : {}),
     } as Row
-  }).sort((x, y) => x.seq - y.seq)
+  }).sort((x, y) => Number(x.ask_seq) - Number(y.ask_seq))
 }
 
 // AN ASK_STATE READ IS DERIVED ONCE PER STORE STATE. What it reads is the rows and the store's seq only: closed() folds
