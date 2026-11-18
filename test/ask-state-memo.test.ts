@@ -4,17 +4,22 @@
 // read derive again, and what a caller does to the rows it was given never reaches the next read. Over records' own
 // store module, in this process, on a store of its own.
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-// config.ts reads these once, at import: a store in a directory of its own, nothing served or dialled.
+// config.ts reads these once, at import: a store in a directory of its own, nothing served or dialled. The store module
+// is one per test process, so another file may have loaded it first, on its own directory, and removed that directory
+// when it ended: the directory the store uses is made again here, and removed when the process exits.
 Object.assign(process.env, {
   RECORDS_VESSEL_ID: "records-memo-test", RECORDS_PORT: "1", DISCOVERY_URL: "http://127.0.0.1:1", RECORDS_ENDPOINT: "http://127.0.0.1:1",
   RECORDS_DATA_DIR: join(mkdtempSync(join(tmpdir(), "records-askmemo-")), "data"), IDENTITY_VESSEL_URL: "http://127.0.0.1:1", METABOB_API_KEY: "unused",
 })
 const store = await import("../src/store")
 const { drainRefolds } = await import("../src/fold")
+const { DATA_DIR } = await import("../src/config")
+mkdirSync(DATA_DIR, { recursive: true })
+process.on("exit", () => rmSync(DATA_DIR, { recursive: true, force: true }))
 type R = Record<string, any>
 
 const put = (body: R, writer: string, role: string): R => {
