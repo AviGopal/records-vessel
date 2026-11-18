@@ -20,6 +20,8 @@ const KEYS: Record<string, { keyId: string; ownerKind: string; userId?: string }
   "person-new-key": { keyId: "kid-new", ownerKind: "person", userId: "user:fixture-a" },
   "person-other-key": { keyId: "kid-other", ownerKind: "person", userId: "user:fixture-b" },
   "person-nouser-key": { keyId: "kid-nouser", ownerKind: "person" },
+  "person-emptyuser-key": { keyId: "kid-emptyuser", ownerKind: "person", userId: "" },
+  "person-numuser-key": { keyId: "kid-numuser", ownerKind: "person", userId: 7 as unknown as string },
   "operator-key": { keyId: "kid-operator", ownerKind: "operator", userId: "user:fixture-a" },
 }
 // on-behalf-of tokens identity minted: the caller's key, its class, its user
@@ -96,9 +98,12 @@ describe("a person's row carries the user identity names for its key", () => {
 
   test("[MUST-FAIL] identity naming no user stamps nothing, never the keyId; a user_id the sender put there is not stored", async () => {
     const s = await fresh()
-    const a = await s.write("person-nouser-key", { shape: "world_changed", what: "q", user_id: "user:forged" })
-    const got = await s.byId(a.id)
-    expect("user_id" in got).toBe(false)
+    for (const key of ["person-nouser-key", "person-emptyuser-key", "person-numuser-key"]) {
+      // no user, an empty one, or one that is not a string: identity named none
+      const a = await s.write(key, { shape: "world_changed", what: "q", user_id: "user:forged" })
+      const got = await s.byId(a.id)
+      expect([key, "user_id" in got]).toEqual([key, false])
+    }
   })
 
   test("[MUST-FAIL] a forged user_id is overwritten by the key's own user on a person's row", async () => {

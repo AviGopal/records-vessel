@@ -70,6 +70,12 @@ const fresh = async () => {
 }
 
 const STATES = ["waiting_pick", "working", "answered", "waiting_on_you"]
+// the one ask_state row a leg expects, asserted to be there first (so a store with none fails by assertion)
+const only = async (s: { states: () => Promise<R[]> }): Promise<R> => {
+  const got = await s.states()
+  expect(got).toHaveLength(1)
+  return got[0]!
+}
 const held = (r: R) => STATES.filter((k) => k in r)
 
 describe("where each open ask stands", () => {
@@ -80,6 +86,10 @@ describe("where each open ask stands", () => {
     expect(got).toHaveLength(1)
     expect(got[0]).toEqual({ shape: "ask_state", id: `ask_state:${a.id}`, writer: "records", role: "records", root: a.id, asker: "kid-person",
       asker_role: "person", asker_user: null, seq: a.seq, t: a.t, input_refs: [a.id], waiting_pick: true })
+    // another ask picked by a selection is no longer waiting to be picked, and the first still is
+    const b = await s.ask("another")
+    await s.select(b.id, "call/git_diff", 1)
+    expect((await s.states()).map((r) => [r.root, "waiting_pick" in r])).toEqual([[a.id, true], [b.id, false]])
   })
 
   test("[MUST-FAIL] a call in flight for the ask is working alone, with its pointer_type and call_id; several are all carried", async () => {
@@ -88,12 +98,12 @@ describe("where each open ask stands", () => {
     const sel = await s.select(a.id, "call/git_diff", 1)
     await s.started(sel.id, "k1", "git_diff")
     await s.started(sel.id, "k2", "fs_read")
-    const [got] = await s.states()
-    expect(held(got!)).toEqual(["working"])
-    expect(got!.working).toEqual([{ pointer_type: "git_diff", call_id: "k1" }, { pointer_type: "fs_read", call_id: "k2" }])
+    const got = await only(s)
+    expect(held(got)).toEqual(["working"])
+    expect(got.working).toEqual([{ pointer_type: "git_diff", call_id: "k1" }, { pointer_type: "fs_read", call_id: "k2" }])
     // a call that ended is no longer in flight
     await s.ended(sel.id, "k1")
-    expect((await s.states())[0]!.working).toEqual([{ pointer_type: "fs_read", call_id: "k2" }])
+    expect((await only(s)).working).toEqual([{ pointer_type: "fs_read", call_id: "k2" }])
   })
 
   test("[MUST-FAIL] a picked ask with no call in flight is not working; a call under an older selection is not in flight", async () => {
@@ -102,8 +112,8 @@ describe("where each open ask stands", () => {
     const old = await s.select(a.id, "call/git_diff", 1)
     await s.started(old.id, "k-old", "git_diff")
     await s.select(a.id, "call/fs_read", 2) // the walk moved on: the older call was cut off
-    const [got] = await s.states()
-    expect(held(got!)).toEqual([])
+    const got = await only(s)
+    expect(held(got)).toEqual([])
   })
 
   test("[MUST-FAIL] an answer to the ask is answered alone, naming the newest answer's id", async () => {
@@ -111,9 +121,9 @@ describe("where each open ask stands", () => {
     const a = await s.ask("what is the gate")
     await s.answer(a.id, 1)
     const second = await s.answer(a.id, 2)
-    const [got] = await s.states()
-    expect(held(got!)).toEqual(["answered"])
-    expect(got!.answered).toBe(second.id)
+    const got = await only(s)
+    expect(held(got)).toEqual(["answered"])
+    expect(got.answered).toBe(second.id)
   })
 
   test("[MUST-FAIL] a described row the outcome schema does not name as evidence is no answer", async () => {
@@ -123,34 +133,37 @@ describe("where each open ask stands", () => {
     await s.write(NODE_KEY, { shape: "change_wanted", wanted: true, selection_ref: sel.id, input_refs: [a.id] }, desc)
     // nor is a row of the answer's shape that the walk's producer did not make (a person's, citing the ask)
     await s.write(PERSON_KEY, { shape: "answer", text: "my own answer", input_refs: [a.id] })
-    const [got] = await s.states()
-    expect(held(got!)).toEqual([])
+    const got = await only(s)
+    expect(held(got)).toEqual([])
   })
 
   test("[MUST-FAIL] a wait on a person is waiting_on_you alone, with the person_wait, its failure, tree, repo and time", async () => {
     const s = await fresh()
     const a = await s.ask("change the shell gate")
     const { f } = await s.landWait(a.id, 1, { tree: "TREE_WAITED_ON", repo: "local-tools-vessel" })
-    const [got] = await s.states()
-    expect(held(got!)).toEqual(["waiting_on_you"])
-    expect(got!.waiting_on_you).toEqual({ person_wait: `person_wait:${f.id}`, failure: f.id, tree: "TREE_WAITED_ON", repo: "local-tools-vessel", t: f.t })
+    const got = await only(s)
+    expect(held(got)).toEqual(["waiting_on_you"])
+    expect(got.waiting_on_you).toEqual({ person_wait: `person_wait:${f.id}`, failure: f.id, tree: "TREE_WAITED_ON", repo: "local-tools-vessel", t: f.t })
   })
 
   test("[MUST-FAIL] when several states hold all are carried: waiting_on_you with working, and with answered", async () => {
     const s = await fresh()
     const a = await s.ask("change the shell gate")
-    await s.landWait(a.id, 1)
+    const fa = (await s.landWait(a.id, 1)).f
     const sel = await s.select(a.id, "call/git_diff", 2)
     await s.started(sel.id, "k1", "git_diff")
-    const [got] = await s.states()
-    expect(held(got!)).toEqual(["working", "waiting_on_you"])
-    expect(got!.working).toEqual([{ pointer_type: "git_diff", call_id: "k1" }])
+    const got = await only(s)
+    expect(held(got)).toEqual(["working", "waiting_on_you"])
+    expect(got.working).toEqual([{ pointer_type: "git_diff", call_id: "k1" }])
     const b = await s.ask("another")
     const ans = await s.answer(b.id, 3)
-    await s.landWait(b.id, 4)
+    const fb = (await s.landWait(b.id, 4)).f
     const both = (await s.states()).find((r) => r.root === b.id)!
     expect(held(both)).toEqual(["answered", "waiting_on_you"])
     expect(both.answered).toBe(ans.id)
+    // each ask's own wait: a's names a's failure, b's names b's
+    const now = await s.states()
+    expect(now.map((r) => [r.root, r.waiting_on_you?.failure])).toEqual([[a.id, fa.id], [b.id, fb.id]])
   })
 
   test("[MUST-FAIL] a person's Right on a result closes the ask: its row drops out; a Wrong leaves it open, still answered", async () => {
