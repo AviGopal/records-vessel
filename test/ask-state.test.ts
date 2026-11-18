@@ -4,7 +4,7 @@
 // none that does not. A person's Right on a result or a lapse closes the ask, and its row drops out. Rows are in the
 // forms the walk, described, the owner and a person's key write them. A stored ask_state is refused.
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Fake, fake, freePort, healthy, run, until } from "./harness"
@@ -22,7 +22,8 @@ let stop: () => void = () => {}
 afterEach(() => stop())
 
 type R = Record<string, any>
-const fresh = async () => {
+// pre: rows already stored when records starts (rows written before a rule records now enforces at write)
+const fresh = async (pre: R[] = []) => {
   const discovery: Fake = fake((path) => Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true }))
   const kid = (k: unknown) => k === PERSON_KEY ? ["kid-person", "person"] : k === PERSON2_KEY ? ["kid-person2", "person"] : k === UNMARKED_KEY ? ["kid-unmarked", "unclassified"] : undefined
   const identity: Fake = fake((_p, body) => {
@@ -30,6 +31,7 @@ const fresh = async () => {
     return k ? Response.json({ success: true, data: { authenticated: true, keyId: k[0], ownerKind: k[1] } }) : Response.json({ success: false }, { status: 401 })
   })
   const dir = mkdtempSync(join(tmpdir(), "records-askstate-"))
+  if (pre.length > 0) writeFileSync(join(dir, "rows"), pre.map((r) => `${JSON.stringify(r)}\n`).join(""))
   const port = freePort()
   const vessel = run("src/index.ts", {
     RECORDS_VESSEL_ID: "records-test", RECORDS_PORT: String(port), DISCOVERY_URL: discovery.url,
@@ -166,14 +168,32 @@ describe("where each open ask stands", () => {
     // a selection with no root (as the walk wrote before selections named one) and one with an empty root
     const bare = await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-bare", a: "produce/answer/ch1" }, walk)
     const empty = await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-empty", root: "", a: "produce/answer/ch1" }, walk)
-    await s.write(NODE_KEY, { shape: "answer", text: "no selection", input_refs: [a.id] }, desc)
-    await s.write(NODE_KEY, { shape: "answer", text: "unknown selection", selection_ref: "no-such-selection", input_refs: [a.id] }, desc)
-    await s.write(NODE_KEY, { shape: "answer", text: "rootless selection", selection_ref: bare.id, input_refs: [a.id] }, desc)
-    await s.write(NODE_KEY, { shape: "answer", text: "empty-root selection", selection_ref: empty.id, input_refs: [a.id] }, desc)
-    // a selection_ref naming a row that is no selection, though it names the ask as root (the walk's stall failure)
+    expect((await s.write(NODE_KEY, { shape: "answer", text: "rootless selection", selection_ref: bare.id, input_refs: [a.id] }, desc)).id).toBeString()
+    expect((await s.write(NODE_KEY, { shape: "answer", text: "empty-root selection", selection_ref: empty.id, input_refs: [a.id] }, desc)).id).toBeString()
+    // records refuses a producer's row naming no selection at write, so these are never stored (the next leg reads ones
+    // stored before that rule)
     const stall = await s.write(NODE_KEY, { shape: "failure", kind: "stall", root: a.id, selections: 60, since_seq: 1, input_refs: [a.id] }, walk)
-    await s.write(NODE_KEY, { shape: "answer", text: "not a selection", selection_ref: stall.id, input_refs: [a.id] }, desc)
+    for (const ref of [{}, { selection_ref: "no-such-selection" }, { selection_ref: stall.id }]) {
+      expect((await s.write(NODE_KEY, { shape: "answer", text: "refused", ...ref, input_refs: [a.id] }, desc)).id).toBeUndefined()
+    }
     const got = await only(s)
+    expect("answered" in got).toBe(false)
+  })
+
+  test("[MUST-FAIL] a stored answer naming no selection, an unknown one, or a row that is no selection answers no ask", async () => {
+    // rows stored before records refused a producer's row naming no selection: the ask, the walk's stall failure naming
+    // it as root, and three answers citing it whose selection_ref resolves to no selection
+    const t = "2026-11-01T00:00:00.000Z"
+    const row = (n: number, r: R): R => ({ input_refs: [], ...r, seq: n, t, id: `stored-${n}` })
+    const ask = row(1, { shape: "world_changed", what: "stored ask", writer: "kid-person", role: "person" })
+    const stall = row(2, { shape: "failure", kind: "stall", root: ask.id, selections: 60, since_seq: 1, input_refs: [ask.id], writer: WALK, role: "walk" })
+    const s = await fresh([ask, stall,
+      row(3, { shape: "answer", text: "no selection", input_refs: [ask.id], ...desc }),
+      row(4, { shape: "answer", text: "unknown selection", selection_ref: "no-such-selection", input_refs: [ask.id], ...desc }),
+      row(5, { shape: "answer", text: "not a selection", selection_ref: stall.id, input_refs: [ask.id], ...desc }),
+    ])
+    const got = await only(s)
+    expect(got.root).toBe(ask.id)
     expect("answered" in got).toBe(false)
   })
 
