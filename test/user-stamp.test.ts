@@ -165,4 +165,12 @@ describe("a person's row carries the user identity names for its key", () => {
     // a number names a number: where {seq} finds its ask
     expect((await s.states({ seq: a.seq })).map((r) => r.root)).toEqual([a.id])
   })
+
+  test("[MUST-FAIL] a where value names one type: seq as a string matches nothing, seq as a number matches its ask", async () => {
+    const s = await fresh()
+    const a = await s.write("person-old-key", { shape: "world_changed", what: "stamped" })
+    expect(typeof a.seq).toBe("number")
+    expect(await s.states({ seq: String(a.seq) })).toEqual([])
+    expect((await s.states({ seq: a.seq })).map((r) => r.root)).toEqual([a.id])
+  })
 })
