@@ -22,6 +22,7 @@ const KEYS: Record<string, { keyId: string; ownerKind: string; userId?: string }
   "person-nouser-key": { keyId: "kid-nouser", ownerKind: "person" },
   "person-emptyuser-key": { keyId: "kid-emptyuser", ownerKind: "person", userId: "" },
   "person-numuser-key": { keyId: "kid-numuser", ownerKind: "person", userId: 7 as unknown as string },
+  "person-sevenuser-key": { keyId: "kid-sevenuser", ownerKind: "person", userId: "7" },
   "operator-key": { keyId: "kid-operator", ownerKind: "operator", userId: "user:fixture-a" },
 }
 // on-behalf-of tokens identity minted: the caller's key, its class, its user
@@ -172,5 +173,20 @@ describe("a person's row carries the user identity names for its key", () => {
     expect(typeof a.seq).toBe("number")
     expect(await s.states({ seq: String(a.seq) })).toEqual([])
     expect((await s.states({ seq: a.seq })).map((r) => r.root)).toEqual([a.id])
+  })
+
+  test("[MUST-FAIL] a number matches only a number: never a true flag, a null user or a numeric-string user", async () => {
+    const s = await fresh()
+    const a = await s.write("person-nouser-key", { shape: "world_changed", what: "no user, waiting on a pick" })
+    const b = await s.write("person-sevenuser-key", { shape: "world_changed", what: "user seven" })
+    const got = await s.states()
+    expect(got.map((r) => [r.root, r.waiting_pick, r.asker_user])).toEqual([[a.id, true, null], [b.id, true, "7"]])
+    // Number(true) is 1, Number(null) is 0, Number("7") is 7: none of them is a number
+    expect(await s.states({ waiting_pick: 1 })).toEqual([])
+    expect(await s.states({ asker_user: 0 })).toEqual([])
+    expect(await s.states({ asker_user: 7 })).toEqual([])
+    // the string names the stamped user, and a number still names a number
+    expect((await s.states({ asker_user: "7" })).map((r) => r.root)).toEqual([b.id])
+    expect((await s.states({ seq: b.seq })).map((r) => r.root)).toEqual([b.id])
   })
 })
