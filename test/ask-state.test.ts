@@ -420,4 +420,28 @@ describe("an ask_state is as new as the newest row it is derived from", () => {
     expect("waiting_on_you" in got).toBe(false)
     expect(at(got)).toEqual(at(said))
   })
+
+  test("[MUST-FAIL] a cut-off call's news is the FIRST newer selection of its walker, never a later one or another walker's", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const b = await s.ask("another")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    await s.started(sel.id, "k1", "git_diff")
+    const cut = await s.select(b.id, "call/git_diff", 2)
+    await s.select(b.id, "call/fs_read", 3)
+    await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-4", root: b.id, a: "call/git_diff" }, { writer: "other-walker", role: "walk" })
+    expect(await stamp(s, a.id)).toEqual(at(cut))
+  })
+
+  test("[MUST-FAIL] only a person row about the root after the wait ends it: one before, or one about another ask, is no news", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    const b = await s.ask("another")
+    await s.write(PERSON_KEY, { shape: "note", text: "before", input_refs: [a.id] })
+    const { f } = await s.landWait(a.id, 1)
+    await s.write(PERSON_KEY, { shape: "note", text: "elsewhere", input_refs: [b.id] })
+    expect(await stamp(s, a.id)).toEqual(at(f))
+    const said = await s.write(PERSON_KEY, { shape: "note", text: "looked", input_refs: [a.id] })
+    expect(await stamp(s, a.id)).toEqual(at(said))
+  })
 })
