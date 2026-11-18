@@ -87,7 +87,7 @@ describe("where each open ask stands", () => {
     const got = await s.states()
     expect(got).toHaveLength(1)
     expect(got[0]).toEqual({ shape: "ask_state", id: `ask_state:${a.id}`, writer: "records", role: "records", root: a.id, asker: "kid-person",
-      asker_role: "person", asker_user: null, seq: a.seq, t: a.t, input_refs: [a.id], waiting_pick: true })
+      asker_role: "person", asker_user: null, seq: a.seq, t: a.t, ask_seq: a.seq, ask_t: a.t, input_refs: [a.id], waiting_pick: true })
     // another ask picked by a selection is no longer waiting to be picked, and the first still is
     const b = await s.ask("another")
     await s.select(b.id, "call/git_diff", 1)
@@ -320,5 +320,104 @@ describe("where each open ask stands", () => {
     const eps = (await s.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all" })) as { roots: Array<{ root: R }> }
     expect(eps.roots.map((x) => x.root.shape)).toEqual(["gap"])
     expect(await s.states()).toEqual([])
+  })
+})
+
+// An ask_state's seq and t are the newest stored row its facts are derived from (a state ending counts), and its ask_seq
+// and ask_t the ask's own: a reader tells news by seq, never by working it out.
+describe("an ask_state is as new as the newest row it is derived from", () => {
+  const stamp = async (s: Awaited<ReturnType<typeof fresh>>, root: string): Promise<[number, string]> => {
+    const r = (await s.states()).find((x) => x.root === root)!
+    return [r.seq, r.t]
+  }
+  const at = (r: R): [number, string] => [r.seq, r.t]
+
+  test("[MUST-FAIL] ask_seq and ask_t are the ask's own, and rows sort by them", async () => {
+    const s = await fresh()
+    const a = await s.ask("first")
+    const b = await s.ask("second")
+    await s.select(a.id, "call/git_diff", 1)
+    const got = await s.states()
+    expect(got.map((r) => [r.root, r.ask_seq, r.ask_t])).toEqual([[a.id, a.seq, a.t], [b.id, b.seq, b.t]])
+  })
+
+  test("[MUST-FAIL] a new answer raises seq to the answer's", async () => {
+    const s = await fresh()
+    const a = await s.ask("what is the gate")
+    const ans = await s.answer(a.id, 1)
+    expect(await stamp(s, a.id)).toEqual(at(ans))
+  })
+
+  test("[MUST-FAIL] a new call raises seq to its started hop", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    expect(await stamp(s, a.id)).toEqual(at(sel))
+    const h = await s.started(sel.id, "k1", "git_diff")
+    expect(await stamp(s, a.id)).toEqual(at(h))
+  })
+
+  test("[MUST-FAIL] a call ending raises seq: its ended hop, its failure, or the walker's newer selection that cut it off", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const b = await s.ask("another")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    await s.started(sel.id, "k1", "git_diff")
+    await s.started(sel.id, "k2", "fs_read")
+    await s.started(sel.id, "k3", "fs_list")
+    const e = await s.ended(sel.id, "k1")
+    expect(await stamp(s, a.id)).toEqual(at(e))
+    const f = await s.write(NODE_KEY, { shape: "failure", selection_ref: sel.id, call_id: "k2", status: 500, input_refs: [sel.id] }, walk)
+    expect(await stamp(s, a.id)).toEqual(at(f))
+    // k3 is still in flight; the walker's selection for another ask cuts it off, and that selection is news for this ask
+    const other = await s.select(b.id, "call/git_diff", 2)
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect("working" in got).toBe(false)
+    expect(at(got)).toEqual(at(other))
+  })
+
+  test("[MUST-FAIL] a selection for another ask that ends none of this ask's calls leaves its seq where it was", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const b = await s.ask("another")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    await s.started(sel.id, "k1", "git_diff")
+    const e = await s.ended(sel.id, "k1")
+    expect(await stamp(s, a.id)).toEqual(at(e))
+    const other = await s.select(b.id, "call/git_diff", 2)
+    expect(await stamp(s, b.id)).toEqual(at(other))
+    expect(await stamp(s, a.id)).toEqual(at(e))
+  })
+
+  test("[MUST-FAIL] an untouched ask keeps its seq across writes for other asks", async () => {
+    const s = await fresh()
+    const a = await s.ask("left alone")
+    const b = await s.ask("worked on")
+    const sel = await s.select(b.id, "call/git_diff", 1)
+    await s.started(sel.id, "k1", "git_diff")
+    const ans = await s.answer(b.id, 2)
+    await s.landWait(b.id, 3)
+    await s.write(PERSON_KEY, { shape: "note", text: "about b", input_refs: [b.id] })
+    expect(await stamp(s, a.id)).toEqual(at(a))
+    expect((await stamp(s, b.id))[0]).toBeGreaterThan(ans.seq)
+  })
+
+  test("[MUST-FAIL] a new wait on a person raises seq to the wait's failure", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    const { f } = await s.landWait(a.id, 1)
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect(got.waiting_on_you.failure).toBe(f.id)
+    expect(at(got)).toEqual(at(f))
+  })
+
+  test("[MUST-FAIL] the person row that ends a wait raises seq to its own, as the wait drops out", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    await s.landWait(a.id, 1)
+    const said = await s.write(PERSON_KEY, { shape: "note", text: "looked", input_refs: [a.id] })
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect("waiting_on_you" in got).toBe(false)
+    expect(at(got)).toEqual(at(said))
   })
 })
