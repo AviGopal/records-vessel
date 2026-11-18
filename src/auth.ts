@@ -2,6 +2,8 @@
 import { timingSafeEqual } from "node:crypto"
 import { DISCOVERY_URL, IDENTITY_URL, KEY, TRANSPORT_ID } from "./config"
 import { DISCOVERY_RESOLVE, IDENTITY_RESOLVE } from "./routes"
+import { keeper, type Verdict } from "./identity-ask"
+import { oboKeyOf } from "./obo-key"
 import { AUTHENTICATION } from "./shapes"
 
 // obo: the caller came from another node, with an on-behalf-of token its transport forwarded (who.keyId is the caller's key).
@@ -9,7 +11,7 @@ import { AUTHENTICATION } from "./shapes"
 // orgId: the org identity found for the caller's key (for an on-behalf-of token, the org the minting identity signed into
 // it from the caller's key), never a value the sender states.
 export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string; orgId?: string }
-type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; orgId?: unknown; obo?: { node: string; shape: string } } }
+type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; orgId?: unknown; obo?: { node: string; shape: string; expires_at?: string } } }
 type Known = { keyId: string; ownerKind?: string; orgId?: string }
 const kindOf = (a: Answer): { ownerKind?: string; orgId?: string } => ({
   ...(typeof a.data.ownerKind === "string" ? { ownerKind: a.data.ownerKind } : {}),
@@ -29,7 +31,9 @@ const header = (req: Request): string => String(req.headers.get("authorization")
 
 export const keyOf = (req: Request): string => header(req).split(" ").slice(1).join(" ")
 
-const ask = async (pointer: Record<string, unknown>): Promise<Answer | undefined> => {
+// Identity's answer: yes; no (it did not authenticate, or said 401/403); or transient (any other status). An ask that
+// throws (no answer at all) throws to every caller waiting on it, as before.
+const ask = async (pointer: Record<string, unknown>): Promise<Verdict<Answer>> => {
   const init = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -38,14 +42,16 @@ const ask = async (pointer: Record<string, unknown>): Promise<Answer | undefined
   }
   const r = await fetch(new URL(IDENTITY_RESOLVE, IDENTITY_URL).href, init)
   if (!r.ok) {
-    return undefined
+    return r.status === 401 || r.status === 403 ? { no: true } : { transient: true }
   }
   const a = (await r.json()) as Answer
   if (!a.success || !a.data.authenticated) {
-    return undefined
+    return { no: true }
   }
-  return a
+  return { yes: a }
 }
+
+const asked = keeper<Answer>()
 
 const validate = async (key: string, fresh = false): Promise<Known | undefined> => {
   const h = digest(key).toString("hex")
@@ -53,10 +59,11 @@ const validate = async (key: string, fresh = false): Promise<Known | undefined> 
   if (hit !== undefined && !fresh) {
     return hit
   }
-  const a = await ask({ type: "apiKey", apiKey: key })
-  if (a === undefined) {
+  const v = await asked(`key:${h}`, () => ask({ type: "apiKey", apiKey: key }), { fresh })
+  if (!("yes" in v)) {
     return undefined
   }
+  const a = v.yes
   const found: Known = { keyId: String(a.data.keyId), ...kindOf(a) }
   known.set(h, found)
   return found
@@ -71,7 +78,8 @@ export const ownOrg = async (): Promise<string | undefined> => {
   if (own !== undefined && Date.now() - own.at < ORG_TTL_MS) {
     return own.orgId
   }
-  const a = await ask({ type: "apiKey", apiKey: KEY }).catch(() => undefined)
+  const v = await ask({ type: "apiKey", apiKey: KEY }).catch(() => undefined)
+  const a = v !== undefined && "yes" in v ? v.yes : undefined
   const orgId = a === undefined ? undefined : kindOf(a).orgId
   // An unanswered ask is not kept: the next write asks again.
   own = orgId === undefined ? undefined : { at: Date.now(), orgId }
@@ -114,14 +122,23 @@ const transportPeer = async (): Promise<string> => {
 
 // A federation on-behalf-of token, forwarded by this node's transport: valid only when identity answers the binding for
 // exactly this node and the shape being served. A session token identity accepts carries no binding and is refused, and a
-// token with no caller key names nobody to write as. Identity is asked every time: a token lives seconds and each dial
-// mints a new one, so a cached answer would only ever be one that outlived its token.
-const onBehalfOf = async (token: string, shape: string): Promise<Known | undefined> => {
+// token with no caller key names nobody to write as. A yes is kept for the token, its node and its shape, and never past
+// the expiry identity states for the token (a token lives seconds; one with no stated expiry is asked every time). A
+// write asks afresh, as a key's write does.
+const onBehalfOf = async (token: string, shape: string, fresh = false): Promise<Known | undefined> => {
   const node = await transportPeer()
   if (node === "" || shape === "") {
     return undefined
   }
-  const a = await ask({ type: "session", token, audience: { node, shape } })
+  const v = await asked(oboKeyOf(digest(token).toString("hex"), node, shape), () => ask({ type: "session", token, audience: { node, shape } }), {
+    fresh,
+    keepYes: true,
+    yesUntil: (x) => {
+      const t = Date.parse(String(x.data.obo?.expires_at ?? ""))
+      return Number.isFinite(t) ? t : undefined
+    },
+  })
+  const a = "yes" in v ? v.yes : undefined
   if (a === undefined || a.data.obo?.node !== node || a.data.obo?.shape !== shape || !a.data.keyId) {
     return undefined
   }
@@ -131,7 +148,7 @@ const onBehalfOf = async (token: string, shape: string): Promise<Known | undefin
 export const authenticate = async (req: Request, shape: string, fresh = false): Promise<Who> => {
   const bearer = /^Bearer (\S+)$/.exec(header(req))
   if (bearer !== null) {
-    const found = await onBehalfOf(bearer[1] as string, shape)
+    const found = await onBehalfOf(bearer[1] as string, shape, fresh)
     return found === undefined ? { ok: false, self: false, keyId: "" } : { ok: true, self: false, ...found, obo: true }
   }
   const key = keyOf(req)
