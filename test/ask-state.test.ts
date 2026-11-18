@@ -491,4 +491,66 @@ describe("an ask_state is as new as the newest row it is derived from", () => {
     expect(got.waiting_on_you.failure).toBe(f.id)
     expect(at(got)).toEqual(at(f))
   })
+
+  test("[MUST-FAIL] a call's end is its FIRST ended hop or failure: a second one on the same call id is no news", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    await s.started(sel.id, "k1", "git_diff")
+    await s.started(sel.id, "k2", "fs_read")
+    const e = await s.ended(sel.id, "k1")
+    const fail = (id: string) => s.write(NODE_KEY, { shape: "failure", selection_ref: sel.id, call_id: id, status: 500, input_refs: [sel.id] }, walk)
+    const f = await fail("k2")
+    expect(await stamp(s, a.id)).toEqual(at(f))
+    const again = await s.ended(sel.id, "k1")
+    const twice = await fail("k2")
+    expect(again.seq).toBeLessThan(twice.seq)
+    expect(await stamp(s, a.id)).toEqual(at(f))
+    expect(e.seq).toBeLessThan(f.seq)
+  })
+
+  test("[MUST-FAIL] a failure saying waits_for person in a role other than the walk's is no wait, and a person row after it moves nothing", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    const sel = await s.select(a.id, "call/git_land", 1)
+    const f = await s.write(NODE_KEY, { shape: "failure", selection_ref: sel.id, call_id: "c-land-desc", status: 200, waits_for: "person", input_refs: [sel.id] }, desc)
+    expect([f.shape, f.role]).toEqual(["failure", "described"])
+    expect(await stamp(s, a.id)).toEqual(at(sel))
+    await s.write(PERSON_KEY, { shape: "note", text: "looked", input_refs: [a.id] })
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect("waiting_on_you" in got).toBe(false)
+    expect(at(got)).toEqual(at(sel))
+  })
+
+  test("[MUST-FAIL] the person row that ends a wait is the FIRST about the root after it; a later one is no news", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    await s.landWait(a.id, 1)
+    const first = await s.write(PERSON_KEY, { shape: "note", text: "first", input_refs: [a.id] })
+    await s.write(PERSON_KEY, { shape: "note", text: "second", input_refs: [a.id] })
+    expect(await stamp(s, a.id)).toEqual(at(first))
+  })
+
+  test("[MUST-FAIL] another walker's selection does not cut off a walker's call: it is no news for that call's ask", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const b = await s.ask("another")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    const h = await s.started(sel.id, "k1", "git_diff")
+    await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-b", root: b.id, a: "call/git_diff" }, { writer: "walk-b", role: "walk" })
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect(got.working).toEqual([{ pointer_type: "git_diff", call_id: "k1" }])
+    expect(at(got)).toEqual(at(h))
+  })
+
+  test("[MUST-FAIL] a walker's started hop citing another walker's selection is no news for that selection's root", async () => {
+    const s = await fresh()
+    const a = await s.ask("change the gate")
+    const b = await s.ask("another")
+    // the walker has a selection of its own for an open ask, so its calls are read
+    await s.select(a.id, "call/git_diff", 1)
+    const other = await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-b", root: b.id, a: "call/git_diff" }, { writer: "walk-b", role: "walk" })
+    await s.started(other.id, "k-cross", "git_diff")
+    expect(await stamp(s, b.id)).toEqual(at(other))
+  })
 })
