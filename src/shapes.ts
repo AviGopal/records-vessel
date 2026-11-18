@@ -11,6 +11,9 @@ export const RECORD_LAPSED = "record_lapsed"
 // A root waiting on a person now (the person-waits ruling): derived on read from the walk's failures that say waits_for
 // person (fold.ts openPersonWaits), never stored, so no writer can make one.
 export const PERSON_WAIT = "person_wait"
+// Where each open ask stands now: derived on read from the rows on its root (store.ts openAskStates), never stored, so no
+// writer can make one.
+export const ASK_STATE = "ask_state"
 export const ACTIVITY_TEMPLATE = "activity_template"
 export const SELECTION = "selection"
 export const HOP = "hop"

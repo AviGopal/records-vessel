@@ -447,7 +447,7 @@ export const tally = (all: Row[], asOf: number, atSeq: number): Tally => {
 // The newest owner outcome schema of a row list, found once per list (and its length: lists are append-only), not per
 // call: promises() is asked for every grade, and a filter of the whole store each time made a cold standing() ~18x
 // slower on the live rows (database).
-const outcomeSchemaOf = (() => {
+export const outcomeSchemaOf = (() => {
   const byList = new WeakMap<Row[], { n: number; schema: Row | undefined }>()
   return (all: Row[]): Row | undefined => {
     const c = byList.get(all)

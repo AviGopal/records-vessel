@@ -3,9 +3,9 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
 import { declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
-import { LAPSE, blames, grades, openPersonWaits, promises, standing } from "./fold"
+import { LAPSE, blames, grades, openPersonWaits, outcomeSchemaOf, promises, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -71,6 +71,9 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   }
   if (String(body.shape) === PERSON_WAIT) {
     return { status: 400, body: { failure: { status: 400, body: `${PERSON_WAIT}: derived on read from the walk's failures, never written` } } }
+  }
+  if (String(body.shape) === ASK_STATE) {
+    return { status: 400, body: { failure: { status: 400, body: `${ASK_STATE}: derived on read from the rows on each open ask, never written` } } }
   }
   if (OWNER_SHAPES.has(String(body.shape))) {
     if (role !== OWNER) {
@@ -558,6 +561,59 @@ export const rootCalls = (root: string, output = true): Call[] => {
   return all.sort((a, b) => a.seq - b.seq).map((c) => (output ? c : (({ output: _o, ...rest }) => rest)(c) as Call))
 }
 
+// WHERE EACH OPEN ASK STANDS NOW: one derived row per open ask (asks.ts isAsk, as the owner declares asks; not closed by
+// a person's Right on a result or a lapse, as closed() reads it), oldest first, named for its ask (ask_state:<ask id>, the
+// same across reads) and naming who asked (asker, asker_role), so a page can show a person their own asks. Each state
+// that holds is its own field, and a field is absent when its state does not; when several hold, all are carried, and
+// which matters more is for whoever presents them, not for records:
+//   waiting_pick:   no selection names the ask as its root yet (true);
+//   working:        each call made for the ask that is still in flight, as callsOf reads one (started, neither ended
+//                   nor failed, under its walker's newest selection): its pointer_type and call_id;
+//   answered:       the newest answer to it: a row the walk's producer made, of a shape the owner's outcome schema names
+//                   as evidence (what a grade judges as the answer), citing the ask; its id;
+//   waiting_on_you: the person_wait on its root now (openPersonWaits): that row's id, the failure it cites, and the tree,
+//                   repo and time it states.
+// A gap is no ask (no person asked it), so it has no ask_state. Facts only: read from rows present, nothing is written,
+// and no grade or credit reads it. Records refuses a stored one.
+export const openAskStates = (): Row[] => {
+  const declared = askShapes()
+  const done = closed()
+  const asks = rows.filter((r) => isAsk(r, declared) && !done.has(r.id))
+  if (asks.length === 0) return []
+  const open = new Set(asks.map((r) => r.id))
+  const picked = new Set(rows.filter((r) => r.shape === SELECTION && open.has(String(r.root))).map((r) => String(r.root)))
+  const walkers = new Set(rows.filter((r) => r.shape === SELECTION && open.has(String(r.root))).map((r) => String(r.writer)))
+  const working = new Map<string, Array<{ pointer_type: string; call_id: string }>>()
+  for (const w of walkers) {
+    for (const c of callsOf(w, (h, live, sel) => open.has(String(sel?.root)) && live(h))) {
+      if (c.state !== "started") continue
+      into(working, c.root, { pointer_type: c.type, call_id: c.call_id })
+    }
+  }
+  const evidence = new Set([outcomeSchemaOf(rows)?.evidence ?? []].flat()
+    .map((e) => typeof e === "object" && e !== null ? (e as { shape?: unknown }).shape : undefined)
+    .filter((x): x is string => typeof x === "string"))
+  const answered = new Map<string, string>()
+  for (const r of rows) {
+    if (r.role !== DESCRIBED || !evidence.has(r.shape)) continue
+    for (const id of [r.input_refs].flat().map(String)) if (open.has(id)) answered.set(id, r.id)
+  }
+  const waits = new Map(openPersonWaits(rows).map((p) => [String(p.root), p]))
+  return asks.map((a) => {
+    const p = waits.get(a.id)
+    const calls = working.get(a.id)
+    const answer = answered.get(a.id)
+    return {
+      shape: ASK_STATE, id: `${ASK_STATE}:${a.id}`, writer: "records", role: "records", root: a.id, asker: a.writer, asker_role: a.role,
+      seq: a.seq, t: a.t, input_refs: [a.id],
+      ...(picked.has(a.id) ? {} : { waiting_pick: true }),
+      ...(calls !== undefined ? { working: calls } : {}),
+      ...(answer !== undefined ? { answered: answer } : {}),
+      ...(p !== undefined ? { waiting_on_you: { person_wait: p.id, failure: [p.input_refs].flat()[0], tree: p.tree, repo: p.repo, t: p.t } } : {}),
+    } as Row
+  }).sort((x, y) => x.seq - y.seq)
+}
+
 // One call by its id, as walkCalls answers it, with its output; [] when no call has that id.
 export const oneCall = (callId: string): Call[] => {
   const started = rows.find((r) => r.shape === HOP && r.phase === "started" && String(r.call_id) === callId)
@@ -699,6 +755,12 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   if (q.shape === PERSON_WAIT) {
     const waits = openPersonWaits(rows)
     return q.limit === undefined ? waits : waits.slice(-q.limit)
+  }
+  // Where each open ask stands: derived from the rows on its root, never a stored row (openAskStates). where narrows it by
+  // the row's own fields (an asker's own asks: where {asker}).
+  if (q.shape === ASK_STATE) {
+    const states = openAskStates().filter((r) => Object.entries(q.where ?? {}).every(([k, v]) => String(r[k]) === String(v)))
+    return q.limit === undefined ? states : states.slice(-q.limit)
   }
   const matched = read(q)
   const kept = q.limit === undefined ? matched : matched.slice(-q.limit)
