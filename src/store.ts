@@ -577,7 +577,7 @@ export const rootCalls = (root: string, output = true): Call[] => {
 //   working:        each call made for the ask that is still in flight, as callsOf reads one (started, neither ended
 //                   nor failed, under its walker's newest selection): its pointer_type and call_id;
 //   answered:       the newest answer to it: a row the walk's producer made, of a shape the owner's outcome schema names
-//                   as evidence (what a grade judges as the answer), citing the ask; its id;
+//                   as evidence (what a grade judges as the answer), whose own root is the ask; its id;
 //   waiting_on_you: the person_wait on its root now (openPersonWaits): that row's id, the failure it cites, and the tree,
 //                   repo and time it states.
 // A gap is no ask (no person asked it), so it has no ask_state. Facts only: read from rows present, nothing is written,
@@ -598,10 +598,17 @@ export const openAskStates = (): Row[] => {
   const evidence = new Set([outcomeSchemaOf(rows)?.evidence ?? []].flat()
     .map((e) => typeof e === "object" && e !== null ? (e as { shape?: unknown }).shape : undefined)
     .filter((x): x is string => typeof x === "string"))
+  // An answer's own root is the root it states, else the root of the selection it was made under; with neither it
+  // answers no ask. The asks it cites do not decide it: an answer made for one ask may cite another as context, and
+  // is no answer to that one.
+  const rooted = (x: unknown): x is string => typeof x === "string" && x !== ""
+  const selById = new Map(rows.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const ownRoot = (r: Row): string | undefined => rooted(r.root) ? r.root : [selById.get(String(r.selection_ref))?.root].find(rooted)
   const answered = new Map<string, string>()
   for (const r of rows) {
     if (r.role !== DESCRIBED || !evidence.has(r.shape)) continue
-    for (const id of [r.input_refs].flat().map(String)) answered.set(id, r.id)
+    const own = ownRoot(r)
+    if (own !== undefined) answered.set(own, r.id)
   }
   const waits = new Map(openPersonWaits(rows).map((p) => [String(p.root), p]))
   return asks.map((a) => {
