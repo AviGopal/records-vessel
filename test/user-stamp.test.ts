@@ -146,4 +146,21 @@ describe("a person's row carries the user identity names for its key", () => {
     expect((await s.states({ asker_user: "user:fixture-b" })).map((r) => r.root)).toEqual([c.id])
     expect((await s.states({ asker: "kid-new" })).map((r) => r.root)).toEqual([b.id])
   })
+
+  test("[MUST-FAIL] a where naming no user matches nothing: null, the string \"null\" and an empty string, beside unstamped asks", async () => {
+    const s = await fresh()
+    const a = await s.write("person-old-key", { shape: "world_changed", what: "stamped" })
+    await s.write("person-nouser-key", { shape: "world_changed", what: "no user" })
+    await s.write("operator-key", { shape: "world_changed", what: "operator" })
+    // the asks are there, two of them with asker_user null
+    expect((await s.states()).map((r) => r.asker_user)).toEqual(["user:fixture-a", null, null])
+    expect(await s.states({ asker_user: null })).toEqual([])
+    expect(await s.states({ asker_user: "null" })).toEqual([])
+    expect(await s.states({ asker_user: "" })).toEqual([])
+    // for every key, not only asker_user
+    expect(await s.states({ asker: null })).toEqual([])
+    expect(await s.states({ asker: "" })).toEqual([])
+    // a named user still narrows to its asks
+    expect((await s.states({ asker_user: "user:fixture-a" })).map((r) => r.root)).toEqual([a.id])
+  })
 })
