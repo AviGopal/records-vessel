@@ -155,6 +155,9 @@ describe("where each open ask stands", () => {
     expect((await s.states()).map((r) => [r.root, r.answered ?? null])).toEqual([[a.id, toA.id], [b.id, null]])
     const toB = await s.write(NODE_KEY, { shape: "answer", text: "empty root", root: "", selection_ref: selB.id, input_refs: [] }, desc)
     expect((await s.states()).map((r) => [r.root, r.answered ?? null])).toEqual([[a.id, toA.id], [b.id, toB.id]])
+    // a root that is not a string is no root either: the selection's decides
+    const toB2 = await s.write(NODE_KEY, { shape: "answer", text: "numeric root", root: 7, selection_ref: selB.id, input_refs: [] }, desc)
+    expect((await s.states()).map((r) => [r.root, r.answered ?? null])).toEqual([[a.id, toA.id], [b.id, toB2.id]])
   })
 
   test("[MUST-FAIL] an answer with no own root answers no ask, whatever it cites: no selection, an unknown one, a rootless one", async () => {

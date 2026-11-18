@@ -162,5 +162,7 @@ describe("a person's row carries the user identity names for its key", () => {
     expect(await s.states({ asker: "" })).toEqual([])
     // a named user still narrows to its asks
     expect((await s.states({ asker_user: "user:fixture-a" })).map((r) => r.root)).toEqual([a.id])
+    // a number names a number: where {seq} finds its ask
+    expect((await s.states({ seq: a.seq })).map((r) => r.root)).toEqual([a.id])
   })
 })
