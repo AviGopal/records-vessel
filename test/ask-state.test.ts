@@ -79,7 +79,7 @@ describe("where each open ask stands", () => {
     const got = await s.states()
     expect(got).toHaveLength(1)
     expect(got[0]).toEqual({ shape: "ask_state", id: `ask_state:${a.id}`, writer: "records", role: "records", root: a.id, asker: "kid-person",
-      asker_role: "person", seq: a.seq, t: a.t, input_refs: [a.id], waiting_pick: true })
+      asker_role: "person", asker_user: null, seq: a.seq, t: a.t, input_refs: [a.id], waiting_pick: true })
   })
 
   test("[MUST-FAIL] a call in flight for the ask is working alone, with its pointer_type and call_id; several are all carried", async () => {
