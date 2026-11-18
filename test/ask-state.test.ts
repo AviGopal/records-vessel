@@ -128,6 +128,19 @@ describe("where each open ask stands", () => {
     expect((await only(s)).working).toEqual([{ pointer_type: "fs_read", call_id: "k2" }])
   })
 
+  test("a call cut inside an owner's infra window (an install's restart) is neither working nor waiting on the person (a guard)", async () => {
+    // the walk's stop writes the cut call's failure with status 0; the owner's window spans it, so its move was stopped,
+    // not failed (fold.ts moveFailed): the ask shows no call in flight and nothing waiting on its asker
+    const s = await fresh()
+    const a = await s.ask("change the shell gate")
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    await s.started(sel.id, "k-cut", "git_diff")
+    const cut = await s.write(NODE_KEY, { shape: "failure", selection_ref: sel.id, call_id: "k-cut", status: 0, body: "no answer: the walk stopped",
+      input_refs: [sel.id] }, walk)
+    await s.write(NODE_KEY, { shape: "infra_window", window_id: "install-walk-1", from_seq: sel.seq, to_seq: cut.seq, statuses: [0],
+      reason: "install of walk-vessel" }, owner)
+    expect(held(await only(s))).toEqual([])
+  })
   test("[MUST-FAIL] a picked ask with no call in flight is not working; a call under an older selection is not in flight", async () => {
     const s = await fresh()
     const a = await s.ask("change the shell gate")

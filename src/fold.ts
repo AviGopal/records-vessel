@@ -121,11 +121,19 @@ export const openPersonWaits = (seen: Row[]): Row[] => {
   }) as Row).sort((x, y) => x.seq - y.seq)
 }
 
-// The selections whose own move failed: a failure row the walk that made the selection wrote, whatever the status or
-// kind; a skip row is not one (it names a template that could not run, and cites whichever selection the walk was
-// making then). One reading, for the fold's index and its grades alike.
+// WHETHER A WALK FAILURE SAYS ITS MOVE FAILED, one reading for every rule that asks which moves failed (the fold's index,
+// grades, gap closures, promises, landings): any walk failure, whatever its status or kind, except a skip row (it names a
+// template that could not run, and cites whichever selection the walk was making then) and except one inside an owner's
+// infra window of its status (an outage or an install's restart cut the call: the move was stopped, not failed, so it
+// neither stops credit through its selection nor counts against it). The window's rule is moveFailuresOf's: its span,
+// written after the span, and the statuses it names.
+const moveFailed = (seen: Row[]): ((r: Row) => boolean) => {
+  const windows = infraWindowsOf(seen)
+  return (r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip" && !inInfraWindow(r, windows)
+}
+// The selections whose own move failed: a failure row the walk that made the selection wrote (moveFailed).
 const failedOf = (seen: Row[], sels: Map<string, Row>): Set<string> => new Set(seen
-  .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+  .filter(moveFailed(seen))
   .filter((r) => sels.get(String(r.selection_ref))?.writer === r.writer)
   .map((r) => String(r.selection_ref)))
 
@@ -583,7 +591,7 @@ export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[
   if (by === undefined) return []
   const sels = seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED)
   const failed = new Set(seen
-    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+    .filter(moveFailed(seen))
     .map((r) => String(r.selection_ref)))
   const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started" && r.pointer_type === by)
     .map((r) => [String(r.call_id), r]))
@@ -635,7 +643,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   if (by === undefined) return []
   const sels = new Map(seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED).map((r) => [r.id, r]))
   const failed = new Set(seen
-    .filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip")
+    .filter(moveFailed(seen))
     .map((r) => String(r.selection_ref)))
   const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started" && r.pointer_type === by)
     .map((r) => [String(r.call_id), r]))
@@ -739,7 +747,7 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   }
   let index: Index | undefined
   const idx = (): Index => (index ??= indexOf(seen))
-  const failed = new Set(seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip").map((r) => String(r.selection_ref)))
+  const failed = new Set(seen.filter(moveFailed(seen)).map((r) => String(r.selection_ref)))
   // A PROMISE THE WALK COULD NOT KEEP BECAUSE THE REQUEST WAITED ON A PERSON counts for nothing (the USER, 11-16: "No
   // lapse while waiting", carried to promises: the window measured the person's time, not the makers'). Broken, and at
   // the selection that decided it a call on the root was waiting on a person (the walk's failure saying waits_for
@@ -822,7 +830,7 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   if (t === undefined) return [] // no owner credits row: nothing travels, so nothing is credited
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
-  const failed = new Set(seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip").map((r) => String(r.selection_ref)))
+  const failed = new Set(seen.filter(moveFailed(seen)).map((r) => String(r.selection_ref)))
   let index: Index | undefined
   const idx = (): Index => (index ??= indexOf(seen))
   const out = new Map<string, Grade>()

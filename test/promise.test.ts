@@ -193,3 +193,21 @@ describe("a promise, settled by the walk's next selections", () => {
     expect(posts[0].beta).toBe(1.5) // and the promise is in it
   })
 })
+
+describe("a kept promise credits an answer whose produce was cut inside an owner's infra window", () => {
+  // the walk's stop at an install restart cut the answer's own produce (status 0, no kind); the owner's window marks it
+  const cutAnswer = (marked: boolean) => {
+    const b = build()
+    const f = b.add(row("failure", "walk", { selection_ref: b.s0.id, call_id: `c${seq}`, status: 0, body: "the walk was stopped before the call ended" }))
+    if (marked) b.add(row("infra_window", "owner", { window_id: "install-walk-1", from_seq: f.seq - 1, to_seq: f.seq + 1, statuses: [0], reason: "install of walk-vessel" }))
+    b.other()
+    b.call({ type: "fs_edit", path: "/walk-trees/human-surface-vessel-x/src/limits.ts", old_string: "8", new_string: "10" })
+    return b.post()
+  }
+  test("[MUST-FAIL] marked: the kept promise credits the answer's cell at w_check", () => {
+    expect(cutAnswer(true)).toMatchObject({ alpha: 1 + 0.5, beta: 1 })
+  })
+  test("unmarked: the cut produce is a failed move, a stop, and is not credited (a guard)", () => {
+    expect(cutAnswer(false)).toMatchObject({ alpha: 1, beta: 1 })
+  })
+})
