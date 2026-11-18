@@ -99,7 +99,7 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   // A walk's failure row carries whom it blames, decided by records (fold.ts blames), never by the writer.
   const blame = String(body.shape) === FAILURE && role === WALK ? { blames: blames(body) } : {}
   const { [USER_ID]: _given, ...sent } = body
-  const stamp = role === PERSON && typeof user === "string" && user !== "" ? { [USER_ID]: user } : {}
+  const stamp = role === PERSON && user !== undefined ? { [USER_ID]: user } : {}
   const unsigned = { input_refs: [], ...sent, ...deadline, ...blame, seq, t, writer, role, ...stamp }
   const id = new Bun.CryptoHasher("sha256").update(JSON.stringify(unsigned)).digest("hex")
   const row: Row = { ...unsigned, shape: String(body.shape), id }
@@ -588,14 +588,12 @@ export const openAskStates = (): Row[] => {
   const asks = rows.filter((r) => isAsk(r, declared) && !done.has(r.id))
   if (asks.length === 0) return []
   const open = new Set(asks.map((r) => r.id))
-  const picked = new Set(rows.filter((r) => r.shape === SELECTION && open.has(String(r.root))).map((r) => String(r.root)))
-  const walkers = new Set(rows.filter((r) => r.shape === SELECTION && open.has(String(r.root))).map((r) => String(r.writer)))
+  // The selections made for an open ask: whether it was picked, and whose calls may be in flight for it.
+  const sels = rows.filter((r) => r.shape === SELECTION && open.has(String(r.root)))
+  const picked = new Set(sels.map((r) => String(r.root)))
   const working = new Map<string, Array<{ pointer_type: string; call_id: string }>>()
-  for (const w of walkers) {
-    for (const c of callsOf(w, (h, live, sel) => open.has(String(sel?.root)) && live(h))) {
-      if (c.state !== "started") continue
-      into(working, c.root, { pointer_type: c.type, call_id: c.call_id })
-    }
+  for (const w of new Set(sels.map((r) => String(r.writer)))) {
+    for (const c of callsOf(w, () => true)) if (c.state === "started") into(working, c.root, { pointer_type: c.type, call_id: c.call_id })
   }
   const evidence = new Set([outcomeSchemaOf(rows)?.evidence ?? []].flat()
     .map((e) => typeof e === "object" && e !== null ? (e as { shape?: unknown }).shape : undefined)
@@ -603,7 +601,7 @@ export const openAskStates = (): Row[] => {
   const answered = new Map<string, string>()
   for (const r of rows) {
     if (r.role !== DESCRIBED || !evidence.has(r.shape)) continue
-    for (const id of [r.input_refs].flat().map(String)) if (open.has(id)) answered.set(id, r.id)
+    for (const id of [r.input_refs].flat().map(String)) answered.set(id, r.id)
   }
   const waits = new Map(openPersonWaits(rows).map((p) => [String(p.root), p]))
   return asks.map((a) => {
