@@ -22,6 +22,11 @@ let stop: () => void = () => {}
 afterEach(() => stop())
 
 type R = Record<string, any>
+// wait until the clock is past the millisecond of t
+const afterMs = async (t: string): Promise<void> => {
+  const ms = Date.parse(t)
+  while (Date.now() <= ms) await new Promise((r) => setTimeout(r, 1))
+}
 // pre: rows already stored when records starts (rows written before a rule records now enforces at write)
 const fresh = async (pre: R[] = []) => {
   const discovery: Fake = fake((path) => Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true }))
@@ -46,7 +51,19 @@ const fresh = async (pre: R[] = []) => {
     })
     return (await r.json()) as any
   }
-  const write = (key: string, row: object, as?: { writer: string; role: string }) => call(key, { type: "record_write", row, ...(as ?? {}) }) as Promise<R>
+  // write() stamps t to the millisecond, so two rows written within one share a t and a leg telling rows apart by t
+  // (ask_t, an ask_state's t, a wait's t) could not see a mutant swap them. Each write here waits until the clock is past
+  // the previous stored row's t, and asserts the new row's t differs, so every row a leg compares has a t of its own.
+  let lastT: string | undefined
+  const write = async (key: string, row: object, as?: { writer: string; role: string }): Promise<R> => {
+    if (lastT !== undefined) await afterMs(lastT)
+    const out = (await call(key, { type: "record_write", row, ...(as ?? {}) })) as R
+    if (typeof out?.t === "string") {
+      expect(out.t).not.toBe(lastT)
+      lastT = out.t
+    }
+    return out
+  }
   const states = async (where?: object) => (await call(NODE_KEY, { type: "record_read", shape: "ask_state", ...(where ? { where } : {}) })) as R[]
   // the owner's declarations, as the seed writes them: what an ask is (the request schema's ask: true input) and what a
   // grade judges as the answer (the outcome schema's evidence; its context lets a grade judge an answer or a due)
@@ -336,9 +353,12 @@ describe("an ask_state is as new as the newest row it is derived from", () => {
     const s = await fresh()
     const a = await s.ask("first")
     const b = await s.ask("second")
-    await s.select(a.id, "call/git_diff", 1)
+    const sel = await s.select(a.id, "call/git_diff", 1)
+    // the selection is a's news: its t differs from the ask's, so ask_t read from the news would show
+    expect([a.t !== b.t, sel.t !== a.t]).toEqual([true, true])
     const got = await s.states()
     expect(got.map((r) => [r.root, r.ask_seq, r.ask_t])).toEqual([[a.id, a.seq, a.t], [b.id, b.seq, b.t]])
+    expect(got[0]!.t).toBe(sel.t)
   })
 
   test("[MUST-FAIL] a new answer raises seq to the answer's", async () => {
