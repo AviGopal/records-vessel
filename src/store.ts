@@ -632,8 +632,11 @@ const deriveAskStates = (): Row[] => {
   for (const sel of sels) note(String(sel.root), sel)
   for (const w of new Set(sels.map((r) => String(r.writer)))) {
     const mine = rows.filter((r) => MINE.has(r.shape) && r.writer === w)
+    // The walker's selections in store order, which is seq order (rows are appended with a rising seq); each one's
+    // next is the first newer selection, found once here rather than searched for per call.
     const wsels = mine.filter((r) => r.shape === SELECTION)
     const ownSels = new Map(wsels.map((r) => [r.id, r]))
+    const nextSel = new Map(wsels.map((r, i) => [r.id, wsels[i + 1]]))
     const firstBy = (shape: string, phase?: string): Map<string, Row> => {
       const m = new Map<string, Row>()
       for (const r of mine) if (r.shape === shape && (phase === undefined || r.phase === phase) && !m.has(String(r.call_id))) m.set(String(r.call_id), r)
@@ -643,13 +646,14 @@ const deriveAskStates = (): Row[] => {
     const failed = firstBy(FAILURE)
     for (const h of mine.filter((r) => r.shape === HOP && r.phase === "started")) {
       const sel = ownSels.get(String(h.selection_ref))
-      if (sel === undefined) continue
+      // a call for a root that is no open ask is news for no row: skipped before any lookup
+      if (sel === undefined || !open.has(String(sel.root))) continue
       const root = String(sel.root)
       const id = String(h.call_id)
       note(root, h)
       note(root, ended.get(id))
       note(root, failed.get(id))
-      if (!ended.has(id) && !failed.has(id)) note(root, wsels.find((x) => x.seq > sel.seq))
+      if (!ended.has(id) && !failed.has(id)) note(root, nextSel.get(sel.id))
     }
   }
   for (const r of rows) {
