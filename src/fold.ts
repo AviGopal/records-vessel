@@ -784,6 +784,8 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 export type Refold = { fold: string; rows: number; ms: number }
 let refolds: Refold[] = []
 export const drainRefolds = (): Refold[] => { const out = refolds; refolds = []; return out }
+// A derivation kept the same way outside the fold (store.ts's ask states) says its miss here too.
+export const noteRefold = (r: Refold): void => { refolds.push(r) }
 
 const memo = (f: (all: Row[], asOf: number, atSeq: number) => Grade[]) => {
   const byList = new WeakMap<Row[], { n: number; at: Map<string, Grade[]> }>()

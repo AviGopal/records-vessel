@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
 import { declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
-import { LAPSE, blames, grades, openPersonWaits, outcomeSchemaOf, promises, standing } from "./fold"
+import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, promises, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE,
 } from "./shapes"
@@ -582,7 +582,7 @@ export const rootCalls = (root: string, output = true): Call[] => {
 //                   repo and time it states.
 // A gap is no ask (no person asked it), so it has no ask_state. Facts only: read from rows present, nothing is written,
 // and no grade or credit reads it. Records refuses a stored one.
-export const openAskStates = (): Row[] => {
+const deriveAskStates = (): Row[] => {
   const declared = askShapes()
   const done = closed()
   const asks = rows.filter((r) => isAsk(r, declared) && !done.has(r.id))
@@ -625,6 +625,22 @@ export const openAskStates = (): Row[] => {
       ...(p !== undefined ? { waiting_on_you: { person_wait: p.id, failure: [p.input_refs].flat()[0], tree: p.tree, repo: p.repo, t: p.t } } : {}),
     } as Row
   }).sort((x, y) => x.seq - y.seq)
+}
+
+// AN ASK_STATE READ IS DERIVED ONCE PER STORE STATE. What it reads is the rows and the store's seq only: closed() folds
+// grades at seq, a lapse is judged by the newest row's time (the store's own clock, never the process's), and callsOf,
+// openPersonWaits and the declarations read rows. The rows are append-only, so the answer holds while the row count,
+// the seq and the newest row are unchanged; a read in between is served from the kept answer, and each derivation is
+// said as a refold (what a read cost). Every read gets its own copy: nothing a caller does to it reaches the kept one.
+let askStatesKept: { key: string; states: Row[] } | undefined
+export const openAskStates = (): Row[] => {
+  const key = `${rows.length}|${seq}|${rows[rows.length - 1]?.id ?? ""}`
+  if (askStatesKept?.key !== key) {
+    const t0 = performance.now()
+    askStatesKept = { key, states: deriveAskStates() }
+    noteRefold({ fold: ASK_STATE, rows: rows.length, ms: Math.round(performance.now() - t0) })
+  }
+  return structuredClone(askStatesKept.states)
 }
 
 // One call by its id, as walkCalls answers it, with its output; [] when no call has that id.
