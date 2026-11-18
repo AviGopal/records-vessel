@@ -456,4 +456,39 @@ describe("an ask_state is as new as the newest row it is derived from", () => {
     expect("answered" in got).toBe(false)
     expect(at(got)).toEqual(at(sel))
   })
+
+  test("[MUST-FAIL] a walk failure that waits on no person is no wait: it moves nothing, nor does a person row after it", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    const sel = await s.select(a.id, "call/git_land", 1)
+    // a failure under the ask's selection for a call no hop started, so only a wait could make it news
+    await s.write(NODE_KEY, { shape: "failure", selection_ref: sel.id, call_id: "c-land-nowait", status: 500, input_refs: [sel.id] }, walk)
+    expect(await stamp(s, a.id)).toEqual(at(sel))
+    await s.write(PERSON_KEY, { shape: "note", text: "looked", input_refs: [a.id] })
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect("waiting_on_you" in got).toBe(false)
+    expect(at(got)).toEqual(at(sel))
+  })
+
+  test("[MUST-FAIL] the LATEST wait on a root is the one read: a person row after it is news, and with none its failure is", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    await s.landWait(a.id, 1)
+    // a person row between the waits ends the first, so the latest wait alone decides what ends the root's waiting
+    await s.write(PERSON_KEY, { shape: "note", text: "first look", input_refs: [a.id] })
+    const { f } = await s.landWait(a.id, 2)
+    expect(await stamp(s, a.id)).toEqual(at(f))
+    const said = await s.write(PERSON_KEY, { shape: "note", text: "second look", input_refs: [a.id] })
+    expect(await stamp(s, a.id)).toEqual(at(said))
+  })
+
+  test("[MUST-FAIL] with two waits on a root and no person row after either, seq is the second wait's failure", async () => {
+    const s = await fresh()
+    const a = await s.ask("land it")
+    await s.landWait(a.id, 1)
+    const { f } = await s.landWait(a.id, 2)
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect(got.waiting_on_you.failure).toBe(f.id)
+    expect(at(got)).toEqual(at(f))
+  })
 })
