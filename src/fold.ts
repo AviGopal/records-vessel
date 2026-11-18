@@ -857,6 +857,8 @@ export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosur
 type Level = "cell" | "asker" | "move" | "none"
 const move = (c: string): string => c.split("|")[0]
 const asker = (c: string): string | undefined => c.split("|").slice(1).join("|").split(",").find((t) => t.startsWith("asker:"))
+// A cell's move and asker, as move() and asker() give them: what foldFrom splits each cell string into, once per read.
+export const cellParts = (c: string): { move: string; asker: string | undefined } => ({ move: move(c), asker: asker(c) })
 
 export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
@@ -872,11 +874,44 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   const promised = t?.w_check === undefined ? [] : promiseGrades(all, asOf, atSeq).map((k) => scale(k, t.w_check as number))
   const landed = landGrades(all, asOf, atSeq).map((k) => by(k, "w_person"))
   const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed].map((k) => [k.key, k])).values()]
+  // EACH CELL STRING IS SPLIT ONCE PER READ, AND THE GRADES ARE INDEXED ONCE PER READ: by cell, by move, and by move and
+  // asker, here in this call and kept by nothing after it (the next read's grades may differ). Each index lists a grade
+  // once, at its place in latest, so every level below selects the grades a filter of latest selected, in the same
+  // order, and each sum adds them in that order (a floating point sum depends on it). A queried cell is split only when
+  // some grade has a cell, as the levels' comparisons split it only then.
+  const parts = new Map<string, { move: string; asker: string | undefined }>()
+  const part = (x: string): { move: string; asker: string | undefined } => {
+    let p = parts.get(x)
+    if (p === undefined) { p = cellParts(x); parts.set(x, p) }
+    return p
+  }
+  const byCell = new Map<string, Grade[]>()
+  const byMove = new Map<string, Grade[]>()
+  const byAsker = new Map<string, Map<string, Grade[]>>()
+  const list = <K>(m: Map<K, Grade[]>, key: K, k: Grade): void => {
+    const l = m.get(key)
+    if (l === undefined) m.set(key, [k])
+    else if (l[l.length - 1] !== k) l.push(k)
+  }
+  for (const k of latest) {
+    for (const x of k.weights.keys()) part(x)
+    for (const x of k.cells) {
+      const p = part(x)
+      list(byCell, x, k)
+      list(byMove, p.move, k)
+      if (p.asker === undefined) continue
+      if (!byAsker.has(p.move)) byAsker.set(p.move, new Map())
+      list(byAsker.get(p.move)!, p.asker, k)
+    }
+  }
+  const anyCell = latest.some((k) => k.cells.size > 0)
+  if (anyCell) for (const c of cells) part(c)
   return cells.map((c) => {
+    const pc = anyCell ? parts.get(c) : undefined
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],
-      ["asker", (x) => move(x) === move(c) && asker(c) !== undefined && asker(x) === asker(c)],
-      ["move", (x) => move(x) === move(c)],
+      ["asker", (x) => parts.get(x)!.move === pc!.move && pc!.asker !== undefined && parts.get(x)!.asker === pc!.asker],
+      ["move", (x) => parts.get(x)!.move === pc!.move],
     ]
     const own = priors.filter((r) => String(r.cell) === c)
     const p0 = own.reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
@@ -891,12 +926,14 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     // cap how much is inherited (prior_count on the credits row: the inherited record then weighs at most that many
     // grades); with no cap the whole record is inherited. An owner prior on the exact cell is the owner's word and is
     // kept as the prior instead.
-    const mine = latest.filter((k) => [...k.cells].some(levels[0][1]))
+    const mine = byCell.get(c) ?? []
     const ownSet = new Set(mine)
-    const others = latest.filter((k) => !ownSet.has(k))
-    const [coarse, inherited] = levels.slice(1)
-      .map(([level, at]): [Level, Grade[]] => [level, others.filter((k) => [...k.cells].some(at))])
-      .find(([, ks]) => ks.length > 0) ?? ["none" as Level, []]
+    const others = (ks: Grade[] | undefined): Grade[] => (ks ?? []).filter((k) => !ownSet.has(k))
+    const at: Array<[Level, () => Grade[]]> = [
+      ["asker", () => pc === undefined || pc.asker === undefined ? [] : others(byAsker.get(pc.move)?.get(pc.asker))],
+      ["move", () => pc === undefined ? [] : others(byMove.get(pc.move))],
+    ]
+    const [coarse, inherited] = at.map(([level, ks]): [Level, Grade[]] => [level, ks()]).find(([, ks]) => ks.length > 0) ?? ["none" as Level, []]
     const got = sum(inherited, coarse)
     const cap = t?.prior_count
     const scale = cap === undefined ? 1 : Math.min(1, cap / Math.max(got.wins + got.losses, 1e-9))
