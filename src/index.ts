@@ -94,7 +94,9 @@ const HANDLERS = new Map<string, Handler>([
       if (role !== PERSON && String(p.row?.shape) === OUTCOME) {
         console.log(`[records] an outcome from a key not marked a person's was written as ${role} (class=${String(who.ownerKind ?? "none").replace(/[^A-Za-z0-9_-]/g, "?").slice(0, 32)})`)
       }
-      const out = write(p.row, who.keyId, role)
+      // A person's row carries the user identity says the key belongs to (user_id, records' own field, as writer is), so
+      // one person's rows are told apart from another's across their keys. No other role's row is stamped.
+      const out = write(p.row, who.keyId, role, role === PERSON ? who.userId : undefined)
       return answer(out.status, out.body)
     }
     if (p.writer === undefined || p.role === undefined) {

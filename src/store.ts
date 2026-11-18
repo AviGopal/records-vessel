@@ -61,7 +61,11 @@ export const READ_AS_FACT = "read_as_fact"
 // The same for a row records showed thinner than written (fields_omitted, omitting): written back, it would store the
 // reader's thinned copy as if it were the row.
 export const FIELDS_OMITTED = "fields_omitted"
-export const write = (body: Record<string, unknown>, writer: string, role: string): { status: number; body: unknown } => {
+// WHOSE ROW, BY USER: user_id is records' own field, as writer is: the user identity answered for a person's key at the
+// write (index.ts), on a person's row only, and absent when identity named none (never the keyId in its place). A value
+// a sender put in its row is never stored as given: it is dropped from every row, whoever wrote it.
+export const USER_ID = "user_id"
+export const write = (body: Record<string, unknown>, writer: string, role: string, user?: string): { status: number; body: unknown } => {
   const meta = typeof body.meta === "object" && body.meta !== null ? body.meta as Record<string, unknown> : {}
   if (READ_AS_FACT in body || READ_AS_FACT in meta) {
     return { status: 400, body: { failure: { status: 400, body: `${READ_AS_FACT}: a row records showed as read (a hold shown as its fact) is not written back; read with stored: true` } } }
@@ -94,7 +98,9 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   const deadline = typeof body.within_ms === "number" && Number.isFinite(within) && within >= 0 ? { at: Date.parse(t) + within } : {}
   // A walk's failure row carries whom it blames, decided by records (fold.ts blames), never by the writer.
   const blame = String(body.shape) === FAILURE && role === WALK ? { blames: blames(body) } : {}
-  const unsigned = { input_refs: [], ...body, ...deadline, ...blame, seq, t, writer, role }
+  const { [USER_ID]: _given, ...sent } = body
+  const stamp = role === PERSON && typeof user === "string" && user !== "" ? { [USER_ID]: user } : {}
+  const unsigned = { input_refs: [], ...sent, ...deadline, ...blame, seq, t, writer, role, ...stamp }
   const id = new Bun.CryptoHasher("sha256").update(JSON.stringify(unsigned)).digest("hex")
   const row: Row = { ...unsigned, shape: String(body.shape), id }
   appendFileSync(FILE, `${JSON.stringify(row)}\n`)
@@ -563,7 +569,8 @@ export const rootCalls = (root: string, output = true): Call[] => {
 
 // WHERE EACH OPEN ASK STANDS NOW: one derived row per open ask (asks.ts isAsk, as the owner declares asks; not closed by
 // a person's Right on a result or a lapse, as closed() reads it), oldest first, named for its ask (ask_state:<ask id>, the
-// same across reads) and naming who asked (asker, asker_role), so a page can show a person their own asks. Each state
+// same across reads) and naming who asked (asker, asker_role; asker_user, the user records stamped on a person's ask, null
+// when it has none: never the key in its place), so a page can show a person their own asks. Each state
 // that holds is its own field, and a field is absent when its state does not; when several hold, all are carried, and
 // which matters more is for whoever presents them, not for records:
 //   waiting_pick:   no selection names the ask as its root yet (true);
@@ -605,6 +612,7 @@ export const openAskStates = (): Row[] => {
     const answer = answered.get(a.id)
     return {
       shape: ASK_STATE, id: `${ASK_STATE}:${a.id}`, writer: "records", role: "records", root: a.id, asker: a.writer, asker_role: a.role,
+      asker_user: a.role === PERSON && typeof a[USER_ID] === "string" ? a[USER_ID] : null,
       seq: a.seq, t: a.t, input_refs: [a.id],
       ...(picked.has(a.id) ? {} : { waiting_pick: true }),
       ...(calls !== undefined ? { working: calls } : {}),

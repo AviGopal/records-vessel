@@ -10,12 +10,15 @@ import { AUTHENTICATION } from "./shapes"
 // ownerKind: the key's class as identity marks it (person, operator, ...); records stamps a person's row only for "person".
 // orgId: the org identity found for the caller's key (for an on-behalf-of token, the org the minting identity signed into
 // it from the caller's key), never a value the sender states.
-export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string; orgId?: string }
-type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; orgId?: unknown; obo?: { node: string; shape: string; expires_at?: string } } }
-type Known = { keyId: string; ownerKind?: string; orgId?: string }
-const kindOf = (a: Answer): { ownerKind?: string; orgId?: string } => ({
+// userId: the user identity says the key belongs to (its api_key row's user), when it says one; never the keyId in its
+// place, and never a value the sender states.
+export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string; orgId?: string; userId?: string }
+type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; orgId?: unknown; userId?: unknown; obo?: { node: string; shape: string; expires_at?: string } } }
+type Known = { keyId: string; ownerKind?: string; orgId?: string; userId?: string }
+const kindOf = (a: Answer): { ownerKind?: string; orgId?: string; userId?: string } => ({
   ...(typeof a.data.ownerKind === "string" ? { ownerKind: a.data.ownerKind } : {}),
   ...(typeof a.data.orgId === "string" && a.data.orgId !== "" ? { orgId: a.data.orgId } : {}),
+  ...(typeof a.data.userId === "string" && a.data.userId !== "" ? { userId: a.data.userId } : {}),
 })
 
 // Each key's answer is kept for reads, so identity is not asked on every read. A write asks identity afresh (fresh): a
