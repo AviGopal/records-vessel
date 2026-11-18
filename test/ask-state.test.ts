@@ -444,4 +444,16 @@ describe("an ask_state is as new as the newest row it is derived from", () => {
     const said = await s.write(PERSON_KEY, { shape: "note", text: "looked", input_refs: [a.id] })
     expect(await stamp(s, a.id)).toEqual(at(said))
   })
+
+  test("[MUST-FAIL] only an answer is news as an answer: a described row of another shape, or an answer-shaped row the walk wrote, is not", async () => {
+    const s = await fresh()
+    const a = await s.ask("what is the gate")
+    const sel = await s.select(a.id, "produce/answer/ch1", 1)
+    const note = await s.write(NODE_KEY, { shape: "note", text: "context", selection_ref: sel.id, input_refs: [a.id] }, desc)
+    const walked = await s.write(NODE_KEY, { shape: "answer", text: "not described", selection_ref: sel.id, input_refs: [a.id] }, walk)
+    expect([note.shape, walked.shape]).toEqual(["note", "answer"])
+    const got = (await s.states()).find((x) => x.root === a.id)!
+    expect("answered" in got).toBe(false)
+    expect(at(got)).toEqual(at(sel))
+  })
 })
