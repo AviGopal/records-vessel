@@ -526,6 +526,13 @@ const infraWindowsOf = (seen: Row[]): InfraWindow[] => {
 }
 const inInfraWindow = (f: Row, windows: InfraWindow[]): boolean =>
   windows.some((w) => f.seq >= w.from && f.seq <= w.to && w.statuses.has(Number(f.status)))
+// A produce refused only for citing values it was shown is a context gap, not a fault of what it drafted: described
+// found each value it was not offered as a citation in an identifier field of a row it showed, and said so in its own
+// refusal (context_gap: each value and the shown row it was seen in), which the walk lifts from that envelope only. The
+// refusal still stands, so the selection is not credited (moveFailed is unchanged); it is not charged. A refusal naming
+// any value seen nowhere carries no context_gap and is charged as before. Only a produce's refusal: a call's or a run's
+// failure is a tool's answer, which cannot spare its own move, or its template's writer, by carrying the field.
+const contextGap = (f: Row, s: Row): boolean => String(s.a ?? "").startsWith("produce/") && Array.isArray(f.context_gap) && f.context_gap.length > 0
 
 const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
@@ -538,6 +545,7 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     if (s === undefined || String(s.arm) !== TREATED || s.writer !== f.writer) continue
     if (blamed(f) !== "request") continue
     if (inInfraWindow(f, windows)) continue
+    if (contextGap(f, s)) continue
     const asked = s.from === undefined ? undefined : byId.get(String(s.from))
     const wrote = asked === undefined ? undefined : sels.get(String(asked.selection_ref))
     const chose = wrote !== undefined && String(wrote.arm) === TREATED && wrote.writer === f.writer ? wrote : s
