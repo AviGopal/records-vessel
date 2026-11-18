@@ -121,6 +121,8 @@ describe("where each open ask stands", () => {
     const a = await s.ask("what is the gate")
     const sel = await s.select(a.id, "produce/change_wanted/ch1", 1)
     await s.write(NODE_KEY, { shape: "change_wanted", wanted: true, selection_ref: sel.id, input_refs: [a.id] }, desc)
+    // nor is a row of the answer's shape that the walk's producer did not make (a person's, citing the ask)
+    await s.write(PERSON_KEY, { shape: "answer", text: "my own answer", input_refs: [a.id] })
     const [got] = await s.states()
     expect(held(got!)).toEqual([])
   })
