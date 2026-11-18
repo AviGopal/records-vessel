@@ -90,6 +90,9 @@ describe("where each open ask stands", () => {
     const b = await s.ask("another")
     await s.select(b.id, "call/git_diff", 1)
     expect((await s.states()).map((r) => [r.root, "waiting_pick" in r])).toEqual([[a.id, true], [b.id, false]])
+    // the walk saying an ask sat with no move (a stall failure naming it as root) is no pick: it still waits to be picked
+    await s.write(NODE_KEY, { shape: "failure", kind: "stall", root: a.id, selections: 60, since_seq: 1, input_refs: [a.id] }, walk)
+    expect((await s.states()).map((r) => [r.root, "waiting_pick" in r])).toEqual([[a.id, true], [b.id, false]])
   })
 
   test("[MUST-FAIL] a call in flight for the ask is working alone, with its pointer_type and call_id; several are all carried", async () => {
