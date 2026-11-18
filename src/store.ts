@@ -772,12 +772,14 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   // Where each open ask stands: derived from the rows on its root, never a stored row (openAskStates). where narrows it by
   // the row's own fields (an asker's own asks: where {asker}).
   if (q.shape === ASK_STATE) {
-    // A where narrows to rows whose field holds the value named: a non-empty string, or a number. Any other value (null,
-    // an empty string, an object) matches nothing, and neither does a field the row holds as null: a missing user id
-    // passed through never reads as "every ask with none" (asker_user is null on every unstamped ask).
+    // A where narrows to rows whose field holds the value named: a non-empty string matches only a string field equal
+    // to it, a number only a number field equal to it. A value names one type, and a field held as the other is a
+    // different value. Any other value (null, an empty string, an object) matches nothing, and neither does a field the
+    // row holds as null: a missing user id passed through never reads as "every ask with none" (asker_user is null on
+    // every unstamped ask).
     const holds = (got: unknown, v: unknown): boolean =>
-      (typeof v === "string" && v !== "" && (typeof got === "string" || typeof got === "number") && String(got) === v) ||
-      (typeof v === "number" && got === v)
+      (typeof v === "string" && v !== "" && typeof got === "string" && got === v) ||
+      (typeof v === "number" && typeof got === "number" && got === v)
     const states = openAskStates().filter((r) => Object.entries(q.where ?? {}).every(([k, v]) => holds(r[k], v)))
     return q.limit === undefined ? states : states.slice(-q.limit)
   }
