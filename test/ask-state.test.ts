@@ -129,6 +129,48 @@ describe("where each open ask stands", () => {
     expect(got.answered).toBe(second.id)
   })
 
+  test("[MUST-FAIL] an answer made for one ask that cites another answers only its own: the cited ask is not answered", async () => {
+    const s = await fresh()
+    const a = await s.ask("the first ask")
+    const b = await s.ask("the second ask")
+    const selB = await s.select(b.id, "produce/answer/ch1", 1)
+    const ans = await s.write(NODE_KEY, { shape: "answer", text: "for b", selection_ref: selB.id, input_refs: [b.id, a.id] }, desc)
+    expect((await s.states()).map((r) => [r.root, r.answered ?? null])).toEqual([[a.id, null], [b.id, ans.id]])
+  })
+
+  test("[MUST-FAIL] a rootless answer citing nothing is the answer of its selection's root", async () => {
+    const s = await fresh()
+    const a = await s.ask("the ask")
+    const sel = await s.select(a.id, "produce/answer/ch1", 1)
+    const ans = await s.write(NODE_KEY, { shape: "answer", text: "by selection", selection_ref: sel.id, input_refs: [] }, desc)
+    expect((await only(s)).answered).toBe(ans.id)
+  })
+
+  test("[MUST-FAIL] an answer's stated root decides it over its selection's; an empty one is no root, so the selection's decides", async () => {
+    const s = await fresh()
+    const a = await s.ask("the first ask")
+    const b = await s.ask("the second ask")
+    const selB = await s.select(b.id, "produce/answer/ch1", 1)
+    const toA = await s.write(NODE_KEY, { shape: "answer", text: "states a", root: a.id, selection_ref: selB.id, input_refs: [] }, desc)
+    expect((await s.states()).map((r) => [r.root, r.answered ?? null])).toEqual([[a.id, toA.id], [b.id, null]])
+    const toB = await s.write(NODE_KEY, { shape: "answer", text: "empty root", root: "", selection_ref: selB.id, input_refs: [] }, desc)
+    expect((await s.states()).map((r) => [r.root, r.answered ?? null])).toEqual([[a.id, toA.id], [b.id, toB.id]])
+  })
+
+  test("[MUST-FAIL] an answer with no own root answers no ask, whatever it cites: no selection, an unknown one, a rootless one", async () => {
+    const s = await fresh()
+    const a = await s.ask("the ask")
+    // a selection with no root (as the walk wrote before selections named one) and one with an empty root
+    const bare = await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-bare", a: "produce/answer/ch1" }, walk)
+    const empty = await s.write(NODE_KEY, { shape: "selection", arm: "treated", cell: "c-empty", root: "", a: "produce/answer/ch1" }, walk)
+    await s.write(NODE_KEY, { shape: "answer", text: "no selection", input_refs: [a.id] }, desc)
+    await s.write(NODE_KEY, { shape: "answer", text: "unknown selection", selection_ref: "no-such-selection", input_refs: [a.id] }, desc)
+    await s.write(NODE_KEY, { shape: "answer", text: "rootless selection", selection_ref: bare.id, input_refs: [a.id] }, desc)
+    await s.write(NODE_KEY, { shape: "answer", text: "empty-root selection", selection_ref: empty.id, input_refs: [a.id] }, desc)
+    const got = await only(s)
+    expect("answered" in got).toBe(false)
+  })
+
   test("[MUST-FAIL] a described row the outcome schema does not name as evidence is no answer", async () => {
     const s = await fresh()
     const a = await s.ask("what is the gate")
