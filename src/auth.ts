@@ -12,7 +12,9 @@ import { AUTHENTICATION } from "./shapes"
 // it from the caller's key), never a value the sender states.
 // userId: the user identity says the key belongs to (its api_key row's user), when it says one; never the keyId in its
 // place, and never a value the sender states.
-export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string; orgId?: string; userId?: string }
+// transient: refused because identity gave no answer (a 429, a 5xx, the connection reset), not because it said no: the
+// caller is told to ask again later (503), never that its credential is refused. No credential is taken on it.
+export type Who = { ok: boolean; self: boolean; keyId: string; obo?: boolean; ownerKind?: string; orgId?: string; userId?: string; transient?: true }
 type Answer = { success: boolean; data: { authenticated: boolean; keyId: string; ownerKind?: unknown; orgId?: unknown; userId?: unknown; obo?: { node: string; shape: string; expires_at?: string } } }
 type Known = { keyId: string; ownerKind?: string; orgId?: string; userId?: string }
 const kindOf = (a: Answer): { ownerKind?: string; orgId?: string; userId?: string } => ({
@@ -34,8 +36,9 @@ const header = (req: Request): string => String(req.headers.get("authorization")
 
 export const keyOf = (req: Request): string => header(req).split(" ").slice(1).join(" ")
 
-// Identity's answer: yes; no (it did not authenticate, or said 401/403); or transient (any other status). An ask that
-// throws (no answer at all) throws to every caller waiting on it, as before.
+// Identity's answer: yes; no (it did not authenticate, or said 401/403); or transient (any other status, or no answer at
+// all: the connection refused or reset, the body broken off). No answer is identity's outage, not the caller's refusal,
+// and never a throw out of the request: one reset on the way to identity must not end this vessel.
 const ask = async (pointer: Record<string, unknown>): Promise<Verdict<Answer>> => {
   const init = {
     method: "POST",
@@ -43,11 +46,17 @@ const ask = async (pointer: Record<string, unknown>): Promise<Verdict<Answer>> =
     body: JSON.stringify({ impulse: { type: AUTHENTICATION, pointer } }),
     timeout: false,
   }
-  const r = await fetch(new URL(IDENTITY_RESOLVE, IDENTITY_URL).href, init)
+  const r = await fetch(new URL(IDENTITY_RESOLVE, IDENTITY_URL).href, init).catch(() => undefined)
+  if (r === undefined) {
+    return { transient: true }
+  }
   if (!r.ok) {
     return r.status === 401 || r.status === 403 ? { no: true } : { transient: true }
   }
-  const a = (await r.json()) as Answer
+  const a = (await r.json().catch(() => undefined)) as Answer | undefined
+  if (a === undefined) {
+    return { transient: true }
+  }
   if (!a.success || !a.data.authenticated) {
     return { no: true }
   }
@@ -56,13 +65,19 @@ const ask = async (pointer: Record<string, unknown>): Promise<Verdict<Answer>> =
 
 const asked = keeper<Answer>()
 
-const validate = async (key: string, fresh = false): Promise<Known | undefined> => {
+// What validate and onBehalfOf say when identity gave no answer, apart from a refusal (undefined).
+const UNANSWERED = { transient: true } as const
+
+const validate = async (key: string, fresh = false): Promise<Known | typeof UNANSWERED | undefined> => {
   const h = digest(key).toString("hex")
   const hit = known.get(h)
   if (hit !== undefined && !fresh) {
     return hit
   }
   const v = await asked(`key:${h}`, () => ask({ type: "apiKey", apiKey: key }), { fresh })
+  if ("transient" in v) {
+    return UNANSWERED
+  }
   if (!("yes" in v)) {
     return undefined
   }
@@ -128,7 +143,7 @@ const transportPeer = async (): Promise<string> => {
 // token with no caller key names nobody to write as. A yes is kept for the token, its node and its shape, and never past
 // the expiry identity states for the token (a token lives seconds; one with no stated expiry is asked every time). A
 // write asks afresh, as a key's write does.
-const onBehalfOf = async (token: string, shape: string, fresh = false): Promise<Known | undefined> => {
+const onBehalfOf = async (token: string, shape: string, fresh = false): Promise<Known | typeof UNANSWERED | undefined> => {
   const node = await transportPeer()
   if (node === "" || shape === "") {
     return undefined
@@ -141,6 +156,9 @@ const onBehalfOf = async (token: string, shape: string, fresh = false): Promise<
       return Number.isFinite(t) ? t : undefined
     },
   })
+  if ("transient" in v) {
+    return UNANSWERED
+  }
   const a = "yes" in v ? v.yes : undefined
   if (a === undefined || a.data.obo?.node !== node || a.data.obo?.shape !== shape || !a.data.keyId) {
     return undefined
@@ -152,15 +170,18 @@ export const authenticate = async (req: Request, shape: string, fresh = false): 
   const bearer = /^Bearer (\S+)$/.exec(header(req))
   if (bearer !== null) {
     const found = await onBehalfOf(bearer[1] as string, shape, fresh)
-    return found === undefined ? { ok: false, self: false, keyId: "" } : { ok: true, self: false, ...found, obo: true }
+    if (found === undefined || "transient" in found) {
+      return { ok: false, self: false, keyId: "", ...found }
+    }
+    return { ok: true, self: false, ...found, obo: true }
   }
   const key = keyOf(req)
   if (timingSafeEqual(digest(key), OWN)) {
     return { ok: true, self: true, keyId: "" }
   }
   const found = await validate(key, fresh)
-  if (found === undefined) {
-    return { ok: false, self: false, keyId: "" }
+  if (found === undefined || "transient" in found) {
+    return { ok: false, self: false, keyId: "", ...found }
   }
   return { ok: true, self: false, ...found }
 }

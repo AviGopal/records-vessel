@@ -132,9 +132,9 @@ describe("records vessel", () => {
     expect(await as(KINDLESS_KEY)).toMatchObject({ role: "unmarked", writer: "kid-kindless" })
     expect(await as(UNCLASSIFIED_KEY)).toMatchObject({ role: "unmarked", writer: "kid-unclassified" })
     expect(await as(PEER_KEY)).toMatchObject({ role: "unmarked", writer: "kid-peer" })
-    // identity unable to answer: refused, never written as a person
+    // identity unable to answer: nothing written, never as a person; the caller is told to ask again later, not refused
     const down = await write(DOWN_KEY, { shape: "note", text: "x" })
-    expect(down.status).toBe(401)
+    expect(down.status).toBe(503)
   })
 
   test("[MUST-FAIL] a mark identity gives or takes back counts from the next write, not the next restart", async () => {

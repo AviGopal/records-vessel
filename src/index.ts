@@ -6,6 +6,7 @@ import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } fr
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
 import { HEALTH, SERVE } from "./routes"
+import { onServeError } from "./serve-error"
 import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_SUMMARY, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
 import { dispatch } from "./dispatch"
 import { type Query, lapsed, lastSeq, rows, serveRead, unnarrowed, wait, waitExact, write } from "./store"
@@ -139,7 +140,7 @@ const handle = async (req: Request): Promise<Response> => {
   const type = String(body?.impulse?.pointer?.type ?? "")
   const who = await authenticate(req, type, type === RECORD_WRITE)
   if (!who.ok) {
-    return fail(401, "")
+    return fail(who.transient === true ? 503 : 401, "")
   }
   const p = body?.impulse?.pointer
   if (p === undefined || typeof p !== "object" || p === null || !HANDLERS.has(p.type)) {
@@ -153,10 +154,7 @@ Bun.serve({
   idleTimeout: 0,
   routes: { [SERVE]: { POST: handle }, [HEALTH]: { GET: () => Response.json({ vessel: VESSEL_ID }) } },
   fetch: () => fail(404, ""),
-  error: (e) => {
-    console.error(String(e))
-    process.exit(1)
-  },
+  error: onServeError,
 })
 // Only record_summary is declared, so a schema-filling caller (the walk's request producer) is offered counts of what
 // rows hold, by a shape that never answers a row; record_read stays undeclared (summary.ts).

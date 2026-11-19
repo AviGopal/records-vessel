@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // A burst of calls carrying one credential asks identity once (src/identity-ask.ts through src/auth.ts), on the running
-// vessel: an unknown key's refusal is kept a moment (a write still asks afresh), a 429 is shared only by the calls in flight,
+// vessel: an unknown key's refusal is kept a moment (a write still asks afresh), a 429 is shared only by the calls in flight (each answered 503, ask again later),
 // a burst of writes asks once, and an on-behalf-of token's yes is kept for its shape only, within the expiry identity states.
 // identity answers slowly here, so concurrent calls overlap.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
@@ -101,15 +101,18 @@ describe("records: a burst of calls with one credential asks identity once", () 
     expect(await call(body, { type: "record_read", shape: "note" })).toBe(401)
     expect(asks((p) => p.apiKey === "body-unknown-key")).toBe(1)
   })
-  test("[MUST-FAIL] a 429 is shared by the calls in flight, and the next call asks again; each is refused as before", async () => {
+  test("[MUST-FAIL] a 429 is shared by the calls in flight, and the next call asks again; each is told to ask again later (503), never refused", async () => {
     throttled = true
-    const key = "ApiKey unknown-key-two"
-    const statuses = await burst(10, () => call(key, { type: "record_read", shape: "note" }))
-    expect(new Set(statuses)).toEqual(new Set([401]))
-    expect(asks((p) => p.apiKey === "unknown-key-two")).toBe(1)
-    await call(key, { type: "record_read", shape: "note" })
-    expect(asks((p) => p.apiKey === "unknown-key-two")).toBe(2)
-    throttled = false
+    try {
+      const key = "ApiKey unknown-key-two"
+      const statuses = await burst(10, () => call(key, { type: "record_read", shape: "note" }))
+      expect(new Set(statuses)).toEqual(new Set([503]))
+      expect(asks((p) => p.apiKey === "unknown-key-two")).toBe(1)
+      expect(await call(key, { type: "record_read", shape: "note" })).toBe(503)
+      expect(asks((p) => p.apiKey === "unknown-key-two")).toBe(2)
+    } finally {
+      throttled = false
+    }
   })
   test("[MUST-FAIL] a 403 is kept as a 401 is: a read just after it is refused without asking", async () => {
     const key = "ApiKey forbidden-key"
