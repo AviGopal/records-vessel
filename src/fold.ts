@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK , INFRA_WINDOW, PERSON_WAIT } from "./shapes"
-import { deadlineAsks, declaredAsks, isAsk } from "./asks"
+import { deadlineAsks, declaredAsks, isAsk, isDeadline } from "./asks"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -158,14 +158,24 @@ const failedOf = (seen: Row[], sels: Map<string, Row>): Set<string> => new Set(s
 // absent: its credit stays in its root. A person row written by a peer is the records write-side class
 // (agf_zgb2fw6ifh3f), not handled here.
 const CROSSES = new Set([PERSON])
-export const reached = (index: Index, start: string, t: Travel, origin: { by: string; r: number }, stopAt?: (row: Row) => boolean): Map<string, number> => {
-  const crosses = origin.r === 0 || CROSSES.has(origin.by)
+// One index per row list and at_seq: every grade source of one fold reads the same rows, so it is built once. A list
+// that grows is indexed again; one changed in place would not be, which holds because the store only appends rows.
+const indexes = new WeakMap<Row[], { n: number; at: Map<number, Index> }>()
+const indexAt = (all: Row[], atSeq: number): Index => {
+  let c = indexes.get(all)
+  if (c === undefined || c.n !== all.length) { c = { n: all.length, at: new Map() }; indexes.set(all, c) }
+  let i = c.at.get(atSeq)
+  if (i === undefined) { i = indexOf(all.filter((r) => r.seq <= atSeq)); c.at.set(atSeq, i) }
+  return i
+}
+// The rows a selection consumed (the rule above reached): one reading for reached() and the use grade.
+const consumedOf = (index: Index): ((sel: Row) => string[]) => {
   const { byId, sels, made, inputs, failed } = index
   const okRun = (sid: unknown): Row | undefined => {
     const s = sels.get(String(sid))
     return s !== undefined && String(s.a ?? "").startsWith("run/") && !failed.has(s.id) ? s : undefined
   }
-  const consumed = (sel: Row): string[] => {
+  return (sel: Row): string[] => {
     const a = String(sel.a ?? "")
     if (a.startsWith("call/")) return sel.from === undefined ? [] : [String(sel.from)]
     if (a.startsWith("run/")) return [a.slice("run/".length)]
@@ -181,6 +191,11 @@ export const reached = (index: Index, start: string, t: Travel, origin: { by: st
       })
     })
   }
+}
+export const reached = (index: Index, start: string, t: Travel, origin: { by: string; r: number }, stopAt?: (row: Row) => boolean): Map<string, number> => {
+  const crosses = origin.r === 0 || CROSSES.has(origin.by)
+  const { byId, sels, failed } = index
+  const consumed = consumedOf(index)
   const out = new Map<string, number>()
   const seenSel = new Set<string>([start])
   let level = [start]
@@ -243,7 +258,7 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const gradable = (r: Row): boolean => entries === undefined || entries.some((e) => matches(r, e))
   const travel = travelOf(seen)
   let index: Index | undefined
-  const idx = (): Index => (index ??= indexOf(seen))
+  const idx = (): Index => (index ??= indexAt(all, atSeq))
   const given = (r: Row): boolean => (entries ?? []).some((e) => typeof e === "object" && e !== null && "where" in e && matches(r, e))
   // A LAPSE A PERSON OVERTOOK, OR ONE WRITTEN WHILE THE REQUEST WAITED ON A PERSON (the USER, 11-16 ~09:50Z: "Yes, your
   // later grade reopens it"; "No lapse while waiting"). A person's grade (a person row with a numeric r) on the request,
@@ -764,7 +779,7 @@ const promiseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     return names(byId.get(String(x.from))?.pointer, target)
   }
   let index: Index | undefined
-  const idx = (): Index => (index ??= indexOf(seen))
+  const idx = (): Index => (index ??= indexAt(all, atSeq))
   const failed = new Set(seen.filter(moveFailed(seen)).map((r) => String(r.selection_ref)))
   // A PROMISE THE WALK COULD NOT KEEP BECAUSE THE REQUEST WAITED ON A PERSON counts for nothing (the USER, 11-16: "No
   // lapse while waiting", carried to promises: the window measured the person's time, not the makers'). Broken, and at
@@ -850,7 +865,7 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const failed = new Set(seen.filter(moveFailed(seen)).map((r) => String(r.selection_ref)))
   let index: Index | undefined
-  const idx = (): Index => (index ??= indexOf(seen))
+  const idx = (): Index => (index ??= indexAt(all, atSeq))
   const out = new Map<string, Grade>()
   for (const v of seen.filter((r) => r.shape === LAND_VERDICT && r.role === PERSON && r.seq <= asOf).sort((a, b) => a.seq - b.seq)) {
     const r = Number(v.r)
@@ -878,9 +893,78 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   }
   return [...out.values()]
 }
+// USE: a move's output that another move takes as input earns; one nobody takes costs. Each request (root) judges each
+// move once, at the owner's w_check, on the cell of the selection judged:
+//   - used: within the owner's promise_window (the root's next N selections, of any arm, as a promise's window counts
+//     them), an unfailed selection of a DIFFERENT move consumed (consumedOf, the rows reached() walks) a row one of that
+//     move's selections produced → r 1, on the cell of the first of its selections so used. A move's own later steps
+//     never count, so a move cannot earn by feeding itself, and a loop between moves earns each one once;
+//   - unused: N of the root's selections passed after one of its selections and nothing qualified → r 0, once. A use
+//     found later on the same root replaces it, so a move that is used is never also charged for its idle repeats, and
+//     a busy move is not charged per selection for its traffic;
+//   - otherwise (no window passed yet) → no grade.
+// Judged: treated, unfailed selections with a root that produced something: calls and runs (their tool answers), and
+// produces none of whose rows is a grade (a grader is judged by the marks on what it graded) or a deadline (a deadline
+// is judged by its lapse). A selection that made a promise is judged by the promise rule alone, the stronger
+// owner-gated signal, not twice: counted, or refused by that rule's own exemptions (a request waiting on a person is
+// not debited by its promise, so not by its use either). With no promise weight and window on the credits row, nothing
+// is judged.
+const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const t = travelOf(seen)
+  if (t?.promise_window === undefined || t.w_check === undefined) return []
+  const n = t.promise_window, w = t.w_check
+  const index = indexAt(all, atSeq)
+  const consumed = consumedOf(index)
+  const { byId, sels, made, failed } = index
+  const promised = new Set(promiseGrades(all, asOf, atSeq).map((k) => k.judged))
+  const byRoot = new Map<string, Row[]>()
+  const pos = new Map<string, number>()
+  const ordered = [...sels.values()].sort((a, b) => a.seq - b.seq)
+  for (const s of ordered) {
+    if (typeof s.root !== "string") continue
+    if (!byRoot.has(s.root)) byRoot.set(s.root, [])
+    pos.set(s.id, byRoot.get(s.root)!.length)
+    byRoot.get(s.root)!.push(s)
+  }
+  const judged = (s: Row): boolean => {
+    if (String(s.arm) !== TREATED || typeof s.root !== "string" || failed.has(s.id) || promised.has(s.id)) return false
+    const a = String(s.a ?? "")
+    if (a.startsWith("call/") || a.startsWith("run/")) return true
+    const m = made.get(s.id) ?? []
+    return m.length > 0 && m.every((r) => !GRADE_SHAPES.has(String(r.shape)) && !isDeadline(r))
+  }
+  const used = new Set<string>()
+  for (const c of sels.values()) {
+    if (failed.has(c.id) || c.seq > asOf || typeof c.root !== "string") continue
+    for (const x of consumed(c)) {
+      const p = sels.get(String(byId.get(x)?.selection_ref))
+      if (p === undefined || p.root !== c.root || move(String(p.cell)) === move(String(c.cell))) continue
+      const i = pos.get(p.id), j = pos.get(c.id)
+      if (i === undefined || j === undefined || j <= i || j > i + n) continue
+      used.add(p.id)
+    }
+  }
+  const out = new Map<string, Grade>()
+  for (const p of ordered) {
+    // (a take or a passed window is read as of asOf below, so a selection past it earns and costs nothing)
+    if (!judged(p)) continue
+    const cell = String(p.cell)
+    const key = `use|${String(p.root)}|${move(cell)}`
+    if (used.has(p.id)) {
+      if (out.get(key)?.r !== 1) out.set(key, { id: `use:${p.id}`, ok: true, r: 1, judged: p.id, key, cells: new Set([cell]), weights: new Map([[cell, w]]), by: "use", deadline: false })
+      continue
+    }
+    const last = byRoot.get(String(p.root))![pos.get(p.id)! + n]
+    if (last === undefined || last.seq > asOf || out.has(key)) continue
+    out.set(key, { id: `unused:${p.id}`, ok: true, r: 0, judged: p.id, key, cells: new Set([cell]), weights: new Map([[cell, w]]), by: "use", deadline: false })
+  }
+  return [...out.values()]
+}
+export const useGrades = memo(useGradesOf)
 export const landGrades = memo(landGradesOf)
 // The same, computed fresh: what a check compares the kept answers with.
-export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf, landGrades: landGradesOf }
+export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf, landGrades: landGradesOf, useGrades: useGradesOf }
 
 type Level = "cell" | "asker" | "move" | "none"
 const move = (c: string): string => c.split("|")[0]
@@ -901,7 +985,7 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     k.deadline && k.r === 0 ? [by(k, "w_lapse")] : k.by === PERSON ? [by(k, "w_person")] : [])
   const promised = t?.w_check === undefined ? [] : promiseGrades(all, asOf, atSeq).map((k) => scale(k, t.w_check as number))
   const landed = landGrades(all, asOf, atSeq).map((k) => by(k, "w_person"))
-  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed].map((k) => [k.key, k])).values()]
+  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed, ...useGrades(all, asOf, atSeq)].map((k) => [k.key, k])).values()]
   // EACH CELL STRING IS SPLIT ONCE PER READ, AND THE GRADES ARE INDEXED ONCE PER READ: by cell, by move, and by move and
   // asker, here in this call and kept by nothing after it (the next read's grades may differ). Each index lists a grade
   // once, at its place in latest, so every level below selects the grades a filter of latest selected, in the same

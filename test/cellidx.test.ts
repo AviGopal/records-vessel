@@ -7,6 +7,9 @@
 // (levels, seps, order), episode-rows.ts's mixed, gaps and walked, and calledin-rows.ts's earned, at every prefix of each
 // store's rows and three (as_of, at) points per prefix, every alpha and beta as its 64 bits. The same runner, run on this
 // tree, must give the same.
+// Its levels entry was written again by the same runner when the fold gained the use grade: levels is the one store
+// whose credits row carries a promise weight and window, so its posts now include the use grades; with them left out,
+// every store's answers were the earlier snapshot's, bit for bit.
 import { describe, expect, test } from "bun:test"
 import * as F from "../src/fold"
 import type { Row } from "../src/store"

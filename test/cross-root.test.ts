@@ -21,10 +21,11 @@ const RUN = "run|world_changed,did:none,asker:person,age:0"
 const ANS = "produce/answer/ch1|world_changed,did:none,asker:person,age:0"
 const T = { w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12 } as F.Travel
 const K2 = 0.7 * 0.7 // answer k 0, run k 1, mint k 2
-// the parent's (8c05b1c) answer for the mixed pool of debits below, as it printed it
+// the parent's (8c05b1c) answer for the mixed pool of debits below, as it printed it, but the run's alpha: B's answer
+// uses the run's output at the next selection, within the window, so the use grade credits the run once (r 1 at w_check)
 const EXPECTED_MIXED = {
   lapse: [true, 0, 0.48999999999999994], grader: [true, 0, 0.48999999999999994], promise: [true, 0, 0.48999999999999994],
-  posts: [[ANS, 1, 3, "cell"], [RUN, 1, 2.4, "cell"], [MINT, 1, 1.98, "cell"], ["produce/outcome|answer", 1, 1, "none"]],
+  posts: [[ANS, 1, 3, "cell"], [RUN, 2, 2.4, "cell"], [MINT, 1, 1.98, "cell"], ["produce/outcome|answer", 1, 1, "none"]],
 }
 
 // The plan's mint on root A (or on B: sameRoot), its run on B, and B's answer using the run's output.

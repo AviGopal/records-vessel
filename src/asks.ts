@@ -49,7 +49,9 @@ export const isAsk = (r: Row | undefined, declared: Set<string> | undefined): bo
 // A DEADLINE is the producer's due row (role described) with the within_ms it was given and the at records stamped
 // from it; the asks it can close are the ones it cites. The fold judges lapses by this and the episode answers each
 // root's dues by it: one rule, so the walk never waits on a deadline the fold does not judge. Not a deadline: none.
+// A deadline row: what the fold judges a lapse by, whatever it cites.
+export const isDeadline = (r: Row): boolean => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number"
 export const deadlineAsks = (r: Row, byId: (id: string) => Row | undefined, declared: Set<string> | undefined): string[] =>
-  r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number"
+  isDeadline(r)
     ? [r.input_refs].flat().filter((x) => x !== undefined).map(String).filter((id) => isAsk(byId(id), declared))
     : []
