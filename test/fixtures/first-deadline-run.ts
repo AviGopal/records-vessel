@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Writes first-deadline-snapshot.json: for each leg of first-deadline-rows.ts, fresh.grades serialised (ser: in order,
 // Sets and Maps in insertion order and sorted) at every prefix (asOf = atSeq = each seq, over the whole list), and the
-// facts the coverage test reads. Run it on the parent's tree, never on a tree that changes the fold:
+// facts the coverage test reads. Run it on the parent's tree for a change that must not move the fold's grades; a change
+// that moves them on purpose runs it on its own tree and names every grade it moved in its commit body:
 //   bun test/fixtures/first-deadline-run.ts test/fixtures/first-deadline-snapshot.json
 import { writeFileSync } from "node:fs"
 import { fresh } from "../../src/fold"

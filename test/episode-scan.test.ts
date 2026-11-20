@@ -98,7 +98,7 @@ describe("what the episode read costs", () => {
 const WALKER = "walk-1"
 const WALK_OMIT = { selection: ["cands", "posts", "timing"] }
 const WIDE_OMIT = { selection: ["cands", "posts", "timing", "cands"], failure: ["selection_ref"], answer: ["text"], world_changed: ["what"], outcome: ["r"], activity_template: ["calls"], hop: ["no_such_field"], no_such_shape: ["id"] }
-type Answer = { shared: Array<Record<string, unknown>>; roots: Array<{ root: Record<string, unknown>; rows: Array<Record<string, unknown>>; awaits: boolean }> }
+type Answer = { shared: Array<Record<string, unknown>>; roots: Array<{ root: Record<string, unknown>; rows: Array<Record<string, unknown>>; awaits: boolean; dues?: number[] }> }
 // The answer as it must be with omit: exactly the named fields gone from exactly this walker's rows of the named shapes,
 // marked with the ones each row had, and every other row, root and flag as the no-omit answer has them.
 const stripped = (a: Answer, spec: Record<string, string[]>): Answer => {
@@ -107,7 +107,7 @@ const stripped = (a: Answer, spec: Record<string, string[]>): Answer => {
     if (gone.length === 0) return r
     return { ...Object.fromEntries(Object.entries(r).filter(([k]) => !gone.includes(k))), fields_omitted: gone }
   }
-  return { shared: a.shared.map(thin), roots: a.roots.map((x) => ({ root: x.root, rows: x.rows.map(thin), awaits: x.awaits })) }
+  return { shared: a.shared.map(thin), roots: a.roots.map((x) => ({ ...x, rows: x.rows.map(thin) })) }
 }
 
 describe("the episodes read leaves out what its reader names of its own rows", () => {

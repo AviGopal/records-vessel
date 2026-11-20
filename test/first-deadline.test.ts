@@ -6,7 +6,8 @@
 // The grades are the parent's: test/fixtures/first-deadline-snapshot.json was written once by
 // test/fixtures/first-deadline-run.ts run on the parent's tree (the commit names it), over the rows in
 // first-deadline-rows.ts: for each leg, the grades at every prefix (asOf = atSeq = each seq, over the whole list, so a
-// later row is in the list but not seen), serialised in order. This tree's grades must serialise the same.
+// later row is in the list but not seen), serialised in order. This tree's grades must serialise the same. A change that
+// moves a grade on purpose writes the snapshot on its own tree, and its commit names every grade it moved.
 import { describe, expect, test } from "bun:test"
 import { fresh } from "../src/fold"
 import type { Row } from "../src/store"

@@ -28,7 +28,10 @@ const load = async (rows: Row[]) => {
   return store as typeof import("../../src/store")
 }
 const sha = (v: unknown): string => new Bun.CryptoHasher("sha256").update(JSON.stringify(v)).digest("hex")
-type All = { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> }
+type All = { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean; dues?: number[] }> }
+// The snapshot was written before a root's entry carried its dues (the every-deadline change); they are pinned by
+// asks.test.ts, and the rest of each answer is compared as the parent gave it.
+const parentForm = (all: All): All => ({ ...all, roots: all.roots.map(({ dues: _dues, ...x }) => x) })
 const idsOf = (all: All) => ({ shared: all.shared.map((r) => r.id), roots: all.roots.map((x) => ({ root: x.root.id, rows: x.rows.map((r) => r.id), awaits: x.awaits })) })
 
 if (job.fixture !== undefined) {
@@ -39,7 +42,7 @@ if (job.fixture !== undefined) {
   for (const n of prefixes) {
     const store = await load(rows.slice(0, n))
     const one = store.serveRead({ episode: WALKER }) as Row[]
-    const all = store.serveRead({ episode: WALKER, roots: "all" }) as All
+    const all = parentForm(store.serveRead({ episode: WALKER, roots: "all" }) as All)
     out[n] = { sha: { one: sha(one), all: sha(all) }, one: one.map((r) => r.id), all: idsOf(all) }
     last = { n, one, all }
   }

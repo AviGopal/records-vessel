@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // What an ask is, wherever a deadline is read (asks.ts isAsk): the derived lapse, the promise exemption and the open
-// roots read one predicate. A person's grade (an outcome, or any verdict) cited by a deadline is not an ask, so its first
-// citing deadline is never its lapse, and the request that deadline also cites is not failed by it. The request's own
-// first deadline still lapses when it passes ungraded.
+// roots read one predicate. A person's grade (an outcome, or any verdict) cited by a deadline is not an ask, so a
+// deadline citing it is never its lapse. The request's own first deadline still lapses when it passes ungraded; once it
+// has, a later deadline citing the request and the grade derives nothing (every deadline lapses only an ask still open).
 import { describe, expect, test } from "bun:test"
 import * as F from "../src/fold"
 import type { Row } from "../src/store"
@@ -32,12 +32,11 @@ const world = (opts: { role?: string; shape?: string; firstAt?: number; wrong?: 
 }
 
 describe("a person's grade cited by a deadline is not an ask", () => {
-  test("[MUST-FAIL] a due citing [ask, person's Wrong] that passes: no lapse from the Wrong, and the ask is not failed", () => {
-    const w = world()
+  test("[MUST-FAIL] a due citing [ask, person's Wrong] that passes after the ask's own due lapsed it: no lapse from the Wrong", () => {
+    const w = world({ firstAt: 60_000 })
     const rows = [...w.rows, tick(120_000)]
     expect(lapseOf(rows, w.d2)).toBeUndefined()
-    expect(lapseOf(rows, w.d1)).toBeUndefined() // the ask's own first due is an hour ahead
-    expect(failedBy(rows)).toEqual([])
+    expect(failedBy(rows)).toEqual([w.d1.id])
   })
   test("[GUARD] the ask's own first due still lapses when it passes ungraded (deadlines always count)", () => {
     const w = world({ firstAt: 60_000 })
@@ -50,28 +49,28 @@ describe("a person's grade cited by a deadline is not an ask", () => {
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toBeUndefined()
   })
   test("[MUST-FAIL] any verdict a person wrote is a grade, not an ask: a land_verdict r 0 cited by the due", () => {
-    const w = world({ wrong: (a) => row("land_verdict", "person", { r: 0, input_refs: [a.id] }, 10_000) })
+    const w = world({ firstAt: 60_000, wrong: (a) => row("land_verdict", "person", { r: 0, input_refs: [a.id] }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toBeUndefined()
   })
   test("[GUARD] a person's row with r but citing nothing is no verdict: it is an ask, and its first due lapses", () => {
-    const w = world({ wrong: () => row("note", "person", { r: 0 }, 10_000) })
+    const w = world({ firstAt: 60_000, wrong: () => row("note", "person", { r: 0 }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toMatchObject({ ok: true, r: 0 })
   })
   test("[GUARD] a person's row with r 0 and no input_refs at all cites nothing: it is an ask, and its first due lapses", () => {
-    const w = world({ wrong: () => { const x = row("note", "person", { r: 0 }, 10_000) as Record<string, unknown>; delete x.input_refs; return x as Row } })
+    const w = world({ firstAt: 60_000, wrong: () => { const x = row("note", "person", { r: 0 }, 10_000) as Record<string, unknown>; delete x.input_refs; return x as Row } })
     expect("input_refs" in w.wrong).toBe(false)
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toMatchObject({ ok: true, r: 0 })
   })
   test("[GUARD] a person's row with r neither 0 nor 1 judges nothing: it is an ask", () => {
-    const w = world({ wrong: (a) => row("note", "person", { r: 0.5, input_refs: [a.id] }, 10_000) })
+    const w = world({ firstAt: 60_000, wrong: (a) => row("note", "person", { r: 0.5, input_refs: [a.id] }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toMatchObject({ ok: true, r: 0 })
   })
   test("[MUST-FAIL] a person's r 1 cited by the due is a grade too", () => {
-    const w = world({ wrong: (a) => row("land_verdict", "person", { r: 1, input_refs: [a.id] }, 10_000) })
+    const w = world({ firstAt: 60_000, wrong: (a) => row("land_verdict", "person", { r: 1, input_refs: [a.id] }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toBeUndefined()
   })
   test("[MUST-FAIL] a person's outcome is a grade whatever its r: one with r 0.5 cited by the due is no ask", () => {
-    const w = world({ wrong: (a) => row("outcome", "person", { r: 0.5, input_refs: [a.id] }, 10_000) })
+    const w = world({ firstAt: 60_000, wrong: (a) => row("outcome", "person", { r: 0.5, input_refs: [a.id] }, 10_000) })
     expect(lapseOf([...w.rows, tick(120_000)], w.d2)).toBeUndefined()
   })
   test("[GUARD] a due citing a row the store does not hold still lapses for the ask it cites", () => {

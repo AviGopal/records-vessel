@@ -338,12 +338,21 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     .map(credit)
   // A DEADLINE THAT PASSED UNGRADED IS A LAPSE BY RULE (the USER, 11-16: "Yes, a fixed rule records it"). A lapse was
   // a grade the walk's grader had to choose to write, so a busy root lost it in every draw and never closed (489: its
-  // first deadline passed at 11:58 and stayed ungraded). Now, as lapsed() reads it, each ask's FIRST deadline row (a
-  // producer's, with within_ms and the at records stamped), once its at has passed by the store's own clock (the time
-  // of the newest row at asOf, so a replay answers the same), with no counted grade of it and the ask not closed by a
-  // person's Right on a result, is a lapse: r 0 on that deadline, at the first row written after it, crediting the
-  // deadline's chain as a written lapse does. No row is written; it is derived the same way on every read. The rules a
-  // written lapse meets hold: a later person grade on the ask's rows overtakes it, and none while a call waits on a person.
+  // first deadline passed at 11:58 and stayed ungraded). Now, as lapsed() reads it, an ask's deadline row (a producer's,
+  // with within_ms and the at records stamped), once its at has passed by the store's own clock (the time of the newest
+  // row at asOf, so a replay answers the same), with no counted grade of it and the ask not closed by a person's Right on
+  // a result, is a lapse: r 0 on that deadline, at the first row written after it, crediting the deadline's chain as a
+  // written lapse does. No row is written; it is derived the same way on every read. The rules a written lapse meets
+  // hold: a later person grade on the ask's rows overtakes it, and none while a call waits on a person.
+  // EVERY DEADLINE, NOT ONLY THE FIRST (the USER, 11-20: "Later deadlines close it"). A person's later mark overtakes a
+  // lapse and reopens the ask; with only the first deadline judged, a reopened ask could then close only by a person's
+  // Right, and was worked with nothing ever counting against it. So each deadline row is judged, in seq order, and the
+  // first that stands closes the ask: later ones derive nothing, one debit per miss. A refused one closes nothing and
+  // the next deadline is judged anew. A deadline citing several asks closes them all (closed() reads its input_refs), so
+  // it is refused if a person overtook, or a call waits on a person on, any of the asks it would close, as a written lapse
+  // is: a mark on an open ask is never closed over. An ask already closed has nothing to protect: closing it again changes
+  // nothing, and its mark or wait refusing would leave the open ask beside it never closing (live deadlines often cite a
+  // closed ask beside the open one).
   // Each row's time is parsed once, and rows are in seq order with t stamped at write (rising with seq), so the first
   // row at or after a deadline is found by binary search: the rule costs a pass over the rows, not a pass per ask (qa).
   const timeline = seen.filter((r) => r.seq <= asOf).sort((a, b) => a.seq - b.seq)
@@ -361,14 +370,12 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // such an ask would only add a second debit for the same miss (database: 5 asks closed by written lapses).
   const reachedAsks = new Set(real.filter((g) => g.ok && ((g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged))) || (g.r === 0 && g.deadline)))
     .flatMap((g) => asksOf(byId.get(g.judged))))
-  const firstDue = new Map<string, Row>()
-  for (const r of timeline) {
-    if (r.role !== DESCRIBED || typeof r.within_ms !== "number" || typeof r.at !== "number") continue
-    for (const ask of asksOf(r)) if (!firstDue.has(ask)) firstDue.set(ask, r)
-  }
+  const dues = timeline.filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number")
+  const lapsedAsks = new Set<string>()
   const derived: Grade[] = []
-  for (const [ask, due] of firstDue) {
-    if (!(Number(due.at) < now) || counted.has(due.id) || reachedAsks.has(ask)) continue
+  for (const due of dues) {
+    const asks = asksOf(due).filter((ask) => !reachedAsks.has(ask) && !lapsedAsks.has(ask))
+    if (asks.length === 0 || !(Number(due.at) < now) || counted.has(due.id)) continue
     const at = firstAtOrAfter(Number(due.at))
     if (at === undefined) continue
     const s = sels.get(String(due.selection_ref))
@@ -376,7 +383,8 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       // the wait as it stood when the deadline passed: every row strictly before the row that shows it passed (seq
       // at.seq - 0.5: a wait written just before counts, and a person row AT it does not end the wait). That row may be
       // the person's own mark, which speaks after the deadline, not before it (deployment)
-      : overtaken(ask, at.seq) ? "person_later" : waitingAt(ask, at.seq - 0.5) ? "person_wait" : undefined
+      : asks.some((ask) => overtaken(ask, at.seq)) ? "person_later"
+      : asks.some((ask) => waitingAt(ask, at.seq - 0.5)) ? "person_wait" : undefined
     const weights = new Map<string, number>()
     if (refused === undefined && s !== undefined) {
       for (const [id, g] of travel === undefined ? new Map([[s.id, 1]]) : reached(idx(), s.id, travel, { by: LAPSE, r: 0 })) {
@@ -385,10 +393,9 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
         weights.set(c, Math.max(weights.get(c) ?? 0, g))
       }
     }
-    if (!derived.some((g) => g.judged === due.id)) {
-      derived.push({ id: `lapse:${due.id}`, ok: refused === undefined, r: 0, judged: due.id, key: `lapse|${due.id}`, cells: new Set(weights.keys()),
-        weights, by: LAPSE, deadline: true, ...(refused ? { refused } : {}) })
-    }
+    derived.push({ id: `lapse:${due.id}`, ok: refused === undefined, r: 0, judged: due.id, key: `lapse|${due.id}`, cells: new Set(weights.keys()),
+      weights, by: LAPSE, deadline: true, ...(refused ? { refused } : {}) })
+    if (refused === undefined) for (const ask of asks) lapsedAsks.add(ask)
   }
   return [...real, ...derived]
 }

@@ -436,10 +436,20 @@ export const episode = (w: string): Row[] => {
 // A wait is answered by the next person or owner row, which no one writes for a detector's gap: one taken there would
 // hold every root until an unrelated row came. Stated here, where roots are made, so the walk reads it and never needs
 // to know a shape's name.
-export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean }> } => {
+// And a root's deadlines (dues): the `at` of every deadline row among its rows, in seq order, as the fold judges them (a
+// producer's row with within_ms and the at records stamped, citing an ask). Every one counts ("Later deadlines close
+// it"), so the walk bounds a wait by the next one ahead and reads one passed from here, rather than keep its own copy
+// of which deadline is the request's: two copies of one rule drift.
+export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean; dues: number[] }> } => {
   const roots = openRoots(w)
   const found = rootRows(w, roots)
-  return { shared: shared(w), roots: roots.map((root, i) => ({ root, rows: found[i]!, awaits: root.shape !== ARM })) }
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const declared = askShapes()
+  const dues = (rs: Row[]): number[] => [...rs].sort((x, y) => x.seq - y.seq)
+    .filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number"
+      && [r.input_refs].flat().some((id) => isAsk(byId.get(String(id)), declared)))
+    .map((r) => Number(r.at))
+  return { shared: shared(w), roots: roots.map((root, i) => ({ root, rows: found[i]!, awaits: root.shape !== ARM, dues: dues(found[i]!) })) }
 }
 
 // Answers the first row scan finds, rescanning on every write. Given a deadline it answers null at that time and

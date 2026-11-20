@@ -218,3 +218,38 @@ describe("the lapsed read takes asks by the same predicate as the roots", () => 
     expect(await r.lapsed()).toEqual([due.id])
   })
 })
+
+describe("the episode answers each root's deadlines, as the fold judges them", () => {
+  // every deadline row among the root's rows, in seq order: the producer's (role described), with within_ms and the at
+  // records stamped, citing an ask. The walk bounds its wait by the next one ahead and reads one passed from here.
+  const duesOf = async (r: Awaited<ReturnType<typeof fresh>>, root: string) =>
+    ((await r.episodes()).roots as Array<{ root: { id: string }; dues?: number[] }>).find((x) => x.root.id === root)?.dues
+  test("[MUST-FAIL] a root's dues are every deadline row citing an ask, in seq order, each at as records stamped it", async () => {
+    const r = await fresh()
+    const ask = await r.ask("q")
+    const sel = await r.select(ask.id)
+    const ahead = await r.write(NODE_KEY, { shape: "due", within_ms: 3_600_000, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const wrong = await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [answer.id] })
+    const soon = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id, wrong.id] }, desc)
+    expect(await duesOf(r, ask.id)).toEqual([ahead.at, soon.at])
+    expect(ahead.at).toBeGreaterThan(soon.at)
+  })
+  test("[MUST-FAIL] not a deadline: a due row the walk wrote, one with no within_ms, and one citing only a person's grade", async () => {
+    const r = await fresh()
+    const ask = await r.ask("q")
+    const sel = await r.select(ask.id)
+    const answer = await r.write(NODE_KEY, { shape: "answer", text: "a", selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const wrong = await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [answer.id] })
+    await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, walk)
+    await r.write(NODE_KEY, { shape: "due", at: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [wrong.id] }, desc)
+    const real = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    expect(await duesOf(r, ask.id)).toEqual([real.at])
+  })
+  test("[MUST-FAIL] the walk's idle arm has no deadlines", async () => {
+    const r = await fresh()
+    const a = await r.arm()
+    expect(await duesOf(r, a.id)).toEqual([])
+  })
+})
