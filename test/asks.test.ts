@@ -247,6 +247,19 @@ describe("the episode answers each root's deadlines, as the fold judges them", (
     const real = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
     expect(await duesOf(r, ask.id)).toEqual([real.at])
   })
+  test("[MUST-FAIL] once asks are declared, a deadline citing a person's row of another shape is no due, as the fold never lapses it", async () => {
+    const r = await fresh()
+    await r.write(NODE_KEY, ASK_MARK, owner)
+    const ask = await r.ask("q")
+    const sel = await r.select(ask.id)
+    const note = await r.write(PERSON_KEY, { shape: "note", what: "x" })
+    await r.write(NODE_KEY, { shape: "due", within_ms: 3_600_000, selection_ref: sel.id, input_refs: [note.id] }, desc)
+    const real = await r.write(NODE_KEY, { shape: "due", within_ms: 3_600_000, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    const all = (await r.episodes()).roots as Array<{ root: { id: string }; rows: Array<{ id: string }>; dues?: number[] }>
+    // the undeclared deadline is among the request's rows, so leaving it out of dues is the predicate's doing
+    expect(all.find((x) => x.root.id === ask.id)?.rows.length).toBeGreaterThanOrEqual(4)
+    expect(all.map((x) => [x.root.id, x.dues])).toEqual([[ask.id, [real.at]]])
+  })
   test("[MUST-FAIL] the walk's idle arm has no deadlines", async () => {
     const r = await fresh()
     const a = await r.arm()
