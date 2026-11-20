@@ -33,7 +33,8 @@ export const SUMMARY_DESCRIPTION = "Counts what the rows of one shape hold, with
   "summarize (a dotted path such as pointer.type), how many distinct values it takes and its most common short values. " +
   "Read it before changing code that keys on a field of rows, to see which values rows really carry. Summarize keys and " +
   "types, not text: a value longer than 40 characters is counted as long, never shown."
-export const SUMMARY_ANSWERS = "{shape, count, newest_seq, fields: {<path>: {distinct, missing, long, withheld, top: [[value, n], …]} | {refused}}}"
+export const SUMMARY_ANSWERS = "{shape, count, newest_seq, fields: {<path>: {distinct, missing, long, withheld, top: [[value, n], …]} | {refused}}, " +
+  "held?: false, served_by?: [vessel id, …]}: held false when records holds no row of the shape, with the vessels that serve it as a call"
 // Whose values may be shown: rows the system writes (the walk's, a model producer's, a detector's). A person's, the
 // owner's, an operator's or an unmarked key's row may hold a person's words however short ("Wrong", "Stop it now"), so
 // its values are counted as withheld, never shown (qa).
@@ -56,7 +57,21 @@ const TOP_MAX = SUMMARY_INPUTS.properties.top.maximum
 const FIELDS_MAX = SUMMARY_INPUTS.properties.summarize.maxItems
 
 export type FieldSummary = { distinct: number; missing: number; long: number; withheld: number; top: Array<[string, number]> } | { refused: string }
-export type Summary = { shape: string; count: number; newest_seq: number | null; fields: Record<string, FieldSummary> }
+export type Summary = { shape: string; count: number; newest_seq: number | null; fields: Record<string, FieldSummary>; held?: false; served_by?: string[] }
+
+// A shape records holds no row of reads, as a count, like a shape that has none: "0 vessels" from a summary of
+// vesselList, which discovery serves and records never stores. So such an answer says held: false, and, when asked, who
+// serves the shape as a call (discovery's shapeProducers), so the caller can call that instead. A summary takes no
+// filter, so a count of 0 is the shape's whole holding. It stays an answer, never a refusal: a reader binding the
+// newest row of a shape not yet written takes its newest_seq as 0. Who serves it is waited for at most `ms` and left
+// out when not answered in time; held is records' own fact and stays. A shape some row holds is answered as before.
+export const SERVED_BY_MS = 1500
+export const unheld = async <S extends Summary>(s: S, producers?: (shape: string) => Promise<string[] | undefined>, ms = SERVED_BY_MS): Promise<S> => {
+  if (s.count > 0) return s
+  const ids = producers === undefined ? undefined
+    : await Promise.race([producers(s.shape).catch(() => undefined), Bun.sleep(ms).then(() => undefined)])
+  return { ...s, held: false, ...(ids !== undefined ? { served_by: ids } : {}) }
+}
 
 // Every value a dotted path reaches in a row: a list at any step is entered element by element.
 const valuesAt = (row: unknown, path: string[]): unknown[] => {

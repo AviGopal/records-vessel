@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { summarize } from "../src/summary"
+import { SERVED_BY_MS, summarize, unheld } from "../src/summary"
 import type { Row } from "../src/store"
 import { type Fake, fake, freePort, healthy, run, until } from "./harness"
 
@@ -50,6 +50,36 @@ describe("the summary", () => {
     expect(JSON.stringify(s)).not.toContain("kid-person")
   })
 
+  test("[MUST-FAIL] a shape no row holds says held: false, and who serves it as a call when asked", async () => {
+    const asked: string[] = []
+    const s = await unheld(summarize([row("request", {})], "vesselList", ["status"]), async (shape) => { asked.push(shape); return ["discovery-a"] })
+    expect(s).toMatchObject({ shape: "vesselList", count: 0, newest_seq: null, held: false, served_by: ["discovery-a"] })
+    expect(asked).toEqual(["vesselList"])
+  })
+
+  test("[MUST-FAIL] with no one to ask, or no answer, held: false stays and nothing is said of who serves it", async () => {
+    const none = summarize([], "vesselList", ["status"])
+    for (const producers of [undefined, async () => undefined, async () => { throw new Error("down") }]) {
+      const s = await unheld(none, producers)
+      expect([s.held, "served_by" in s]).toEqual([false, false])
+    }
+  })
+
+  test("[MUST-FAIL] who serves it is waited for no longer than the bound", async () => {
+    const t0 = performance.now()
+    const s = await unheld(summarize([], "vesselList", ["status"]), () => new Promise(() => {}), 50)
+    expect(performance.now() - t0).toBeLessThan(1000)
+    expect([s.held, "served_by" in s]).toEqual([false, false])
+  })
+
+  test("[GUARD] a shape some row holds is answered as before: no held, nobody asked", async () => {
+    let asked = 0
+    const s = summarize([row("request", { pointer: { type: "fs_read" } })], "request", ["pointer.type"])
+    const out = await unheld(s, async () => { asked++; return ["x"] })
+    expect(out).toBe(s)
+    expect(["held" in out, "served_by" in out, asked]).toEqual([false, false, 0])
+  })
+
   test("two paths sharing a long prefix are two fields", () => {
     const p = "a".repeat(45)
     const s = summarize([row("x", { [p]: { b: 1, c: 2 } })], "x", [`${p}.b`, `${p}.c`])
@@ -77,16 +107,24 @@ let dir: string
 let port: number
 let vessel: ReturnType<typeof run>
 const KEY = "node-key-for-test"
-const call = async (pointer: object) => {
+// what discovery says of shapeProducers: the vessels serving the shape, or (hang) no answer for longer than the bound
+let hang = false
+const call = async (pointer: object, key = KEY) => {
   const r = await fetch(`http://127.0.0.1:${port}/v2/impulses/resolve`, {
-    method: "POST", headers: { "Content-Type": "application/json", Authorization: `ApiKey ${KEY}` },
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `ApiKey ${key}` },
     body: JSON.stringify({ impulse: { pointer } }),
   })
   return { status: r.status, body: (await r.json()) as any }
 }
 describe("records serving the summary", () => {
   beforeAll(async () => {
-    discovery = fake((path) => Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true }))
+    discovery = fake(async (path, body) => {
+      if (path === "/resolve" && body?.pointer?.type === "shapeProducers") {
+        if (hang) await Bun.sleep(SERVED_BY_MS + 2500)
+        return Response.json({ content: { shape: body.pointer.shape, vesselIds: ["discovery-test"] } })
+      }
+      return Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true })
+    })
     identity = fake(() => Response.json({ success: true, data: { authenticated: true, keyId: "kid-node" } }))
     dir = mkdtempSync(join(tmpdir(), "records-summary-"))
     port = freePort()
@@ -128,4 +166,38 @@ describe("records serving the summary", () => {
       expect([r.status, String(r.body.failure?.body)]).toEqual([400, `Error: record_summary takes only shape, summarize and top: not ${Object.keys(extra).join(", ")}`])
     }
   })
+  const producersAsked = () => discovery.seen.filter((s) => s.path === "/resolve" && (s.body as any)?.pointer?.type === "shapeProducers").map((s) => (s.body as any).pointer.shape)
+
+  test("[MUST-FAIL] a summary of a shape records holds none of (one discovery serves) says held: false and who serves it", async () => {
+    const r = await call({ type: "record_summary", shape: "vesselList", summarize: ["status"] })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ shape: "vesselList", count: 0, newest_seq: null, held: false, served_by: ["discovery-test"] })
+    expect(producersAsked()).toContain("vesselList")
+  })
+
+  test("[GUARD] a summary of a shape records holds is answered as before: no held, discovery not asked", async () => {
+    await call({ type: "record_write", row: { shape: "request", pointer: { type: "fs_read", path: "/y" } }, writer: "walk-test", role: "walk" })
+    const r = await call({ type: "record_summary", shape: "request", summarize: ["pointer.type"] })
+    expect(r.status).toBe(200)
+    expect(["held" in r.body, "served_by" in r.body]).toEqual([false, false])
+    expect(producersAsked()).not.toContain("request")
+  })
+
+  test("[MUST-FAIL] another key is told held: false alone: who serves it is read under the node key, which sees every org", async () => {
+    const before = producersAsked().length
+    const r = await call({ type: "record_summary", shape: "shapeProducers", summarize: ["status"] }, "another-key-for-test")
+    expect(r.status).toBe(200)
+    expect([r.body.held, "served_by" in r.body]).toEqual([false, false])
+    expect(producersAsked().length).toBe(before)
+  })
+
+  test("[MUST-FAIL] discovery not answering delays the answer no longer than the bound, and held: false still comes", async () => {
+    hang = true
+    try {
+      const t0 = performance.now()
+      const r = await call({ type: "record_summary", shape: "vesselHealth", summarize: ["status"] })
+      expect(performance.now() - t0).toBeLessThan(SERVED_BY_MS + 1000)
+      expect([r.status, r.body.held, "served_by" in r.body]).toEqual([200, false, false])
+    } finally { hang = false }
+  }, 10_000)
 })

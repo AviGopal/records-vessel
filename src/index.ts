@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 import { type Who, authenticate, ownOrg } from "./auth"
-import { PORT, VESSEL_ID } from "./config"
+import { DISCOVERY_URL, KEY, PORT, VESSEL_ID } from "./config"
 import { costed } from "./cost"
-import { SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary } from "./summary"
+import { SERVED_BY_MS, SUMMARY_ANSWERS, SUMMARY_DESCRIPTION, SUMMARY_INPUTS, serveSummary, unheld } from "./summary"
 import { foldFrom, tally } from "./fold"
 import { beat, register } from "./heartbeat"
-import { HEALTH, SERVE } from "./routes"
+import { DISCOVERY_RESOLVE, HEALTH, SERVE } from "./routes"
 import { onServeError } from "./serve-error"
 import { GAP, OPERATOR, OUTCOME, OWNER, PEER, PERSON, POSTERIOR, RECORD_LAPSED, RECORD_READ, RECORD_SUMMARY, RECORD_WAIT, RECORD_WAIT_EXACT, RECORD_WRITE, UNMARKED } from "./shapes"
 import { dispatch } from "./dispatch"
@@ -56,6 +56,19 @@ const crossNode = async (p: Pointer, who: Who): Promise<string | undefined> => {
     return "another node writes its own rows, never a person's, an operator's or this node's owner rows"
   }
   return undefined
+}
+
+// The vessels discovery says serve a shape (shapeProducers), by id; undefined when it does not answer, or not in time.
+const producersOf = async (shape: string): Promise<string[] | undefined> => {
+  const r = await fetch(new URL(DISCOVERY_RESOLVE, DISCOVERY_URL).href, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `ApiKey ${KEY}` },
+    body: JSON.stringify({ pointer: { type: "shapeProducers", shape } }),
+    signal: AbortSignal.timeout(SERVED_BY_MS),
+  }).catch(() => undefined)
+  const j = r?.ok ? ((await r.json().catch(() => undefined)) as { content?: { vesselIds?: unknown } } | undefined) : undefined
+  const ids = j?.content?.vesselIds
+  return Array.isArray(ids) && ids.every((x) => typeof x === "string") ? ids : undefined
 }
 
 const HANDLERS = new Map<string, Handler>([
@@ -125,7 +138,10 @@ const HANDLERS = new Map<string, Handler>([
     }
     return answer(200, costed(RECORD_LAPSED, p, () => lapsed(String(p.deadline_shape), String(p.answer_shape), Date.now(), Array.isArray(p.asks) ? p.asks.map(String) : undefined)))
   }],
-  [RECORD_SUMMARY, async (p) => answer(200, costed(RECORD_SUMMARY, p, () => serveSummary(rows, p as Record<string, unknown>)))],
+  // Who serves a shape no row holds is joined for this node's own callers only: discovery is read under the node key,
+  // which sees every org's vessels, so another key is told held: false alone, which says no more than its count.
+  [RECORD_SUMMARY, async (p, who) =>
+    answer(200, await unheld(costed(RECORD_SUMMARY, p, () => serveSummary(rows, p as Record<string, unknown>)), who.self ? producersOf : undefined))],
   [POSTERIOR, async (p) => {
     const at = lastSeq()
     return answer(200, costed(POSTERIOR, { as_of_seq: p.as_of_seq, cells: [p.cells ?? []].flat().length }, () =>
