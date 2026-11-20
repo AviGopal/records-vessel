@@ -107,8 +107,10 @@ let dir: string
 let port: number
 let vessel: ReturnType<typeof run>
 const KEY = "node-key-for-test"
-// what discovery says of shapeProducers: the vessels serving the shape, or (hang) no answer for longer than the bound
+// what discovery says of shapeProducers: the vessels serving the shape (vesselIds, as given), or (hang) no answer for
+// longer than the bound
 let hang = false
+let vesselIds: unknown = ["discovery-test"]
 const call = async (pointer: object, key = KEY) => {
   const r = await fetch(`http://127.0.0.1:${port}/v2/impulses/resolve`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `ApiKey ${key}` },
@@ -121,7 +123,7 @@ describe("records serving the summary", () => {
     discovery = fake(async (path, body) => {
       if (path === "/resolve" && body?.pointer?.type === "shapeProducers") {
         if (hang) await Bun.sleep(SERVED_BY_MS + 2500)
-        return Response.json({ content: { shape: body.pointer.shape, vesselIds: ["discovery-test"] } })
+        return Response.json({ content: { shape: body.pointer.shape, vesselIds } })
       }
       return Response.json(path === "/heartbeat" ? { nextHeartbeatMs: 600000 } : { ok: true })
     })
@@ -173,6 +175,18 @@ describe("records serving the summary", () => {
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ shape: "vesselList", count: 0, newest_seq: null, held: false, served_by: ["discovery-test"] })
     expect(producersAsked()).toContain("vesselList")
+    // asked as this node: discovery scopes what it names by the caller, so an unkeyed read is another answer
+    expect(discovery.seen.find((x) => x.path === "/resolve" && (x.body as any)?.pointer?.shape === "vesselList")?.auth).toBe(`ApiKey ${KEY}`)
+  })
+
+  test("[MUST-FAIL] discovery naming its producers in any other form than a list of ids: no served_by, held: false stays", async () => {
+    try {
+      for (const [i, bad] of [[1], "discovery-test", [["discovery-test"]], null].entries()) {
+        vesselIds = bad
+        const r = await call({ type: "record_summary", shape: `nothing-held-${i}`, summarize: ["status"] })
+        expect([r.status, r.body.held, "served_by" in r.body]).toEqual([200, false, false])
+      }
+    } finally { vesselIds = ["discovery-test"] }
   })
 
   test("[GUARD] a summary of a shape records holds is answered as before: no held, discovery not asked", async () => {
