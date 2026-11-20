@@ -235,7 +235,7 @@ describe("the episode answers each root's deadlines, as the fold judges them", (
     expect(await duesOf(r, ask.id)).toEqual([ahead.at, soon.at])
     expect(ahead.at).toBeGreaterThan(soon.at)
   })
-  test("[MUST-FAIL] not a deadline: a due row the walk wrote, one with no within_ms, and one citing only a person's grade", async () => {
+  test("[MUST-FAIL] not a deadline: a due row the walk wrote, one with no within_ms or none records could time, and one citing only a person's grade", async () => {
     const r = await fresh()
     const ask = await r.ask("q")
     const sel = await r.select(ask.id)
@@ -243,6 +243,8 @@ describe("the episode answers each root's deadlines, as the fold judges them", (
     const wrong = await r.write(PERSON_KEY, { shape: "outcome", r: 0, input_refs: [answer.id] })
     await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, walk)
     await r.write(NODE_KEY, { shape: "due", at: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
+    // a within_ms records cannot turn into a time gets no at, so it is no deadline either
+    await r.write(NODE_KEY, { shape: "due", within_ms: -1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
     await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [wrong.id] }, desc)
     const real = await r.write(NODE_KEY, { shape: "due", within_ms: 1, selection_ref: sel.id, input_refs: [ask.id] }, desc)
     expect(await duesOf(r, ask.id)).toEqual([real.at])

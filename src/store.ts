@@ -2,7 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
-import { declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
+import { deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
 import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE,
@@ -446,8 +446,7 @@ export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; 
   const byId = new Map(rows.map((r) => [r.id, r]))
   const declared = askShapes()
   const dues = (rs: Row[]): number[] => [...rs].sort((x, y) => x.seq - y.seq)
-    .filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number"
-      && [r.input_refs].flat().some((id) => isAsk(byId.get(String(id)), declared)))
+    .filter((r) => deadlineAsks(r, (id) => byId.get(id), declared).length > 0)
     .map((r) => Number(r.at))
   return { shared: shared(w), roots: roots.map((root, i) => ({ root, rows: found[i]!, awaits: root.shape !== ARM, dues: dues(found[i]!) })) }
 }

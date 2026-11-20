@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { ACTIVITY_TEMPLATE, ARM, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, GIT_DIFF, HOP, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, SELECTION, SHAPE_SCHEMA, TREATED, WALK , INFRA_WINDOW, PERSON_WAIT } from "./shapes"
-import { declaredAsks, isAsk } from "./asks"
+import { deadlineAsks, declaredAsks, isAsk } from "./asks"
 import type { Row } from "./store"
 
 export type Post = { cell: string; alpha: number; beta: number }
@@ -370,11 +370,10 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // such an ask would only add a second debit for the same miss (database: 5 asks closed by written lapses).
   const reachedAsks = new Set(real.filter((g) => g.ok && ((g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged))) || (g.r === 0 && g.deadline)))
     .flatMap((g) => asksOf(byId.get(g.judged))))
-  const dues = timeline.filter((r) => r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number")
   const lapsedAsks = new Set<string>()
   const derived: Grade[] = []
-  for (const due of dues) {
-    const asks = asksOf(due).filter((ask) => !reachedAsks.has(ask) && !lapsedAsks.has(ask))
+  for (const due of timeline) {
+    const asks = deadlineAsks(due, (id) => byId.get(id), declared).filter((ask) => !reachedAsks.has(ask) && !lapsedAsks.has(ask))
     if (asks.length === 0 || !(Number(due.at) < now) || counted.has(due.id)) continue
     const at = firstAtOrAfter(Number(due.at))
     if (at === undefined) continue

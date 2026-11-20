@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // WHAT AN ASK IS: one predicate for every reader that asks it (the open roots, the deadline rule's lapses, the lapses a
 // grader is shown, a promise's exemption), so a row is an ask to all of them or to none.
-import { ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, FAILURE_RULE, HOLD_FACT, INFRA_WINDOW, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SHAPE_DESCRIPTION, SHAPE_SCHEMA } from "./shapes"
+import { ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, FAILURE_RULE, HOLD_FACT, INFRA_WINDOW, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SHAPE_DESCRIPTION, SHAPE_SCHEMA } from "./shapes"
 import type { Row } from "./store"
 
 export const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW, HOLD_FACT])
@@ -45,3 +45,11 @@ export const declaredAsks = (from: Row[]): Set<string> | undefined => {
 export const isAsk = (r: Row | undefined, declared: Set<string> | undefined): boolean =>
   r !== undefined && r.shape !== OUTCOME && !verdict(r) &&
   (declared === undefined ? exogenous([r]).length > 0 : EXO_ROLES.has(r.role) && declared.has(r.shape))
+
+// A DEADLINE is the producer's due row (role described) with the within_ms it was given and the at records stamped
+// from it; the asks it can close are the ones it cites. The fold judges lapses by this and the episode answers each
+// root's dues by it: one rule, so the walk never waits on a deadline the fold does not judge. Not a deadline: none.
+export const deadlineAsks = (r: Row, byId: (id: string) => Row | undefined, declared: Set<string> | undefined): string[] =>
+  r.role === DESCRIBED && typeof r.within_ms === "number" && typeof r.at === "number"
+    ? [r.input_refs].flat().filter((x) => x !== undefined).map(String).filter((id) => isAsk(byId(id), declared))
+    : []
