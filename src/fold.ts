@@ -368,7 +368,9 @@ const gradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   // the asks a written grade already closed, as closed() and lapsed() read them: a person's Right on a result (not on a
   // promise: "Accurate, not done"), or a counted written lapse on any of its deadlines. Found once. A derived lapse on
   // such an ask would only add a second debit for the same miss (database: 5 asks closed by written lapses).
-  const reachedAsks = new Set(real.filter((g) => g.ok && ((g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged))) || (g.r === 0 && g.deadline)))
+  // Only a grade that stands closes (latestOf, standing()'s own rule): a person's Right they later marked down no longer
+  // closes the ask, so it no longer exempts the ask from its next deadline.
+  const reachedAsks = new Set(latestOf(real).filter((g) => (g.r === 1 && g.by === PERSON && !promises(seen, byId.get(g.judged))) || (g.r === 0 && g.deadline))
     .flatMap((g) => asksOf(byId.get(g.judged))))
   const lapsedAsks = new Set<string>()
   const derived: Grade[] = []
@@ -480,8 +482,10 @@ export const promises = (all: Row[], r: Row | undefined): boolean => {
     r[(e as { deferred_by: string }).deferred_by] !== undefined && r[(e as { deferred_by: string }).deferred_by] !== null)
 }
 
-export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] =>
-  [...new Map(grades(all, asOf, atSeq).filter((k) => k.ok).map((k) => [k.key, k])).values()]
+// Of a writer's counted grades of one row, only the latest stands: one rule for standing() and the deadline rule's
+// closed asks.
+const latestOf = (gs: Grade[]): Grade[] => [...new Map(gs.filter((k) => k.ok).map((k) => [k.key, k])).values()]
+export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] => latestOf(grades(all, asOf, atSeq))
 
 // Whom a move's failure blames, decided once, here, and stamped on the failure row when it is written (store.ts), so
 // every reader (this fold, and the walk deciding whether to call the same pointer again) reads one answer:
