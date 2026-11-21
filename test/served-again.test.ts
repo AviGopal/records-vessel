@@ -96,6 +96,19 @@ describe("a shape served again", () => {
     await w.p
   })
 
+  test("[MUST-FAIL] a wait on a shape it names is answered by a row of that shape from the walk itself; shapes that are not a list name none", async () => {
+    let got: Row | null | undefined
+    const named = store.waitAsked({ shapes: ["walk_named"], after_seq: store.lastSeq(), episode: W }).then((r) => { got = r })
+    let other: Row | null | undefined
+    const bare = store.waitAsked({ shapes: "walk_named", after_seq: store.lastSeq(), episode: W }).then((r) => { other = r })
+    const id = put("walk_named", "walk", {}, W)
+    await Bun.sleep(0)
+    expect(got).toMatchObject({ id, shape: "walk_named" })
+    expect(other).toBeUndefined()
+    put("world_changed", "person")
+    await Promise.all([named, bare])
+  })
+
   test("[GUARD] the root stays open: a served row closes nothing", () => {
     expect(store.episodes(W).roots.map((r) => r.root.id)).toContain(gap)
   })
