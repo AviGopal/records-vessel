@@ -5,7 +5,7 @@ import { DATA_DIR } from "./config"
 import { deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
 import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE, WAIT_BOUND,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -347,6 +347,22 @@ const rootRows = (w: string, roots: Row[]): Row[][] => {
     for (const i of at) joined.push([i, p.id])
   }
   for (const [i, id] of joined) keep[i]!.add(id)
+  // A detector's row that a shape is served again ({served: <shape>}) is a root's when the root holds a failure of this
+  // walk's that named that shape unserved before it: the recovery of what held the root's moves, placed where it held
+  // them, and nowhere else (a root none of whose calls went unserved there has learned nothing from it).
+  const recovered = rows.filter((r) => r.role === DETECTOR && typeof r.served === "string" && r.served !== "")
+  if (recovered.length > 0) {
+    const ids = new Map(rows.map((r) => [r.id, r]))
+    keep.forEach((own, i) => {
+      const first = new Map<string, number>()
+      for (const id of own) {
+        const r = ids.get(id)
+        if (r?.shape !== FAILURE || r.writer !== w || typeof r.unserved !== "string") continue
+        first.set(r.unserved, Math.min(first.get(r.unserved) ?? Infinity, r.seq))
+      }
+      for (const r of recovered) if (r.seq > (first.get(String(r.served)) ?? Infinity)) keep[i]!.add(r.id)
+    })
+  }
   const answer = new Map<string, number[]>()
   keep.forEach((ids, i) => { for (const id of ids) into(answer, id, i) })
   const out = roots.map((): Row[] => [])
@@ -474,18 +490,35 @@ const until = (scan: () => Row[], deadline?: number): Promise<Row | null> =>
 /** How many waits are registered: a wait that answered, by a row or by its deadline, is not among them. */
 export const waiting = (): number => wakers.length
 
+// The owner's bound on a wait (WAIT_BOUND's within_ms, the latest row), read at each wait. With no row a wait is held
+// until a row answers it, said once.
+let saidUnbounded = false
+const waitBound = (): number | undefined => {
+  const latest = rows.filter((r) => r.shape === WAIT_BOUND && r.role === OWNER).at(-1)
+  const ms = latest?.within_ms
+  if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) return ms
+  if (!saidUnbounded) { saidUnbounded = true; console.log("[records] no wait_bound row of the owner's: a wait with nothing ahead is held until a row answers it") }
+  return undefined
+}
+
 // A wait answers the first row of the shapes asked for (or any exogenous row, or a detector's gap row, opening or closing
-// one: either changes what the walk has to work) after afterSeq. Given a deadline (the
-// caller's `until`, ms since the epoch, taken from its own rows), it answers null at that time: "nothing yet". Without
-// one it waits for a row, as before; nothing here sets a bound of its own.
-export const wait = (shapes: string[], afterSeq: number, deadline?: number): Promise<Row | null> =>
-  until(() => {
+// one: either changes what the walk has to work) after afterSeq. So does a detector's row the waiting walk (episode, the
+// walk's id) is shown in one of its open roots: an observation placed where the walk's work is (rootRows), which is how
+// a shape served again ends a wait its going unserved began. Given a deadline (the caller's `until`, ms since the
+// epoch, taken from its own rows), it answers null at that time: "nothing yet". The owner's bound (waitBound) ends it
+// sooner when it comes first, so no wait is held for ever on an outside change no row records.
+export const wait = (shapes: string[], afterSeq: number, deadline?: number, episode?: string): Promise<Row | null> => {
+  const bound = waitBound()
+  return until(() => {
     const after = rows.filter((r) => r.seq > afterSeq)
     const want = new Set(shapes)
     const gaps = after.filter((r) => r.shape === GAP && r.role === DETECTOR)
-    const hits = new Set([...after.filter((r) => want.has(r.shape)), ...exogenous(after), ...gaps].map((r) => r.id))
+    const seen = after.filter((r) => r.role === DETECTOR && r.shape !== GAP)
+    const shown = episode === undefined || seen.length === 0 ? new Set<string>() : new Set(rootRows(episode, openRoots(episode)).flat().map((r) => r.id))
+    const hits = new Set([...after.filter((r) => want.has(r.shape)), ...exogenous(after), ...gaps, ...seen.filter((r) => shown.has(r.id))].map((r) => r.id))
     return after.filter((r) => hits.has(r.id))
-  }, deadline)
+  }, bound === undefined ? deadline : Math.min(deadline ?? Infinity, Date.now() + bound))
+}
 
 export const waitExact = (shapes: string[], afterSeq: number, where: Record<string, unknown> | undefined): Promise<Row> =>
   until(() => {

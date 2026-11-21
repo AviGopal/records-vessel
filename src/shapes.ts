@@ -49,6 +49,9 @@ export const INFRA_WINDOW = "infra_window"
 // whose latest row holds (operator_hold) with a reason starting reason_prefix is not held: it is work, and a producer is
 // shown fact's fields in place of the hold (the USER: "Read as facts"). Configuration, never work.
 export const HOLD_FACT = "hold_fact"
+// The owner's bound on how long a wait is held with nothing answering it: {within_ms}, the latest row its value. At it
+// records answers the wait with null ("nothing yet") and the walk chooses again. Configuration, never work.
+export const WAIT_BOUND = "wait_bound"
 // A detector's observation that a check failed or stopped failing.
 export const GAP = "gap"
 // Who writes a gap: a check the node runs (pull-sync's failing-test generator among them), under the node's own key.
