@@ -520,6 +520,11 @@ export const wait = (shapes: string[], afterSeq: number, deadline?: number, epis
   }, bound === undefined ? deadline : Math.min(deadline ?? Infinity, Date.now() + bound))
 }
 
+/** A record_wait pointer as the walk sends it: the shapes, the seq it waits after, its deadline and the walk it is. */
+export const waitAsked = (p: { shapes?: unknown; after_seq?: unknown; until?: unknown; episode?: unknown }): Promise<Row | null> =>
+  wait(Array.isArray(p.shapes) ? p.shapes.map(String) : [], Number(p.after_seq), p.until === undefined ? undefined : Number(p.until),
+    p.episode === undefined ? undefined : String(p.episode))
+
 export const waitExact = (shapes: string[], afterSeq: number, where: Record<string, unknown> | undefined): Promise<Row> =>
   until(() => {
     const want = new Set(shapes)

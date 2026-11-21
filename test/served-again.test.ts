@@ -29,9 +29,10 @@ const gap = put("gap", "detector", { gap_id: "g-held", status: "open", category:
 const sel = put("selection", "walk", { pool_refs: [gap], input_refs: [gap], root: gap }, W)
 put("failure", "walk", { selection_ref: sel, status: 404, unserved: "llm_completion" }, W)
 
+// the wait as the walk sends it, through the pointer record_wait's handler reads
 const waitOf = (episode: string | undefined) => {
   let got: Row | null | undefined
-  const p = store.wait([], store.lastSeq(), undefined, episode).then((r) => { got = r })
+  const p = store.waitAsked({ shapes: [], after_seq: store.lastSeq(), ...(episode === undefined ? {} : { episode }) }).then((r) => { got = r })
   return { p, ended: async () => { await Bun.sleep(0); return got } }
 }
 const rowsOfRoot = (): string[] => store.episodes(W).roots.find((r) => r.root.id === gap)?.rows.map((r) => r.id) ?? []
@@ -41,6 +42,9 @@ describe("a shape served again", () => {
     const w = waitOf(W)
     const other = put("shape_served", "detector", { served: "git_diff" })
     const walks = put("shape_served", "walk", { served: "llm_completion" }, W)
+    // the walk's own row under the root's selection is the root's, and is no observation: it ends nothing
+    const hop = put("hop", "walk", { selection_ref: sel, phase: "started", call_id: "c-own" }, W)
+    expect(rowsOfRoot()).toContain(hop)
     expect(await w.ended()).toBeUndefined()
     expect(rowsOfRoot()).not.toContain(other)
     expect(rowsOfRoot()).not.toContain(walks)
@@ -69,6 +73,27 @@ describe("a shape served again", () => {
     const early = put("shape_served", "detector", { served: "described_shape" })
     put("failure", "walk", { selection_ref: sel, status: 404, unserved: "described_shape" }, W)
     expect(rowsOfRoot()).not.toContain(early)
+  })
+
+  test("[MUST-FAIL] a recovery between two failures on the shape is the root's: it came after the shape first went unserved", async () => {
+    put("failure", "walk", { selection_ref: sel, status: 404, unserved: "tool_a" }, W)
+    const w = waitOf(W)
+    const id = put("shape_served", "detector", { served: "tool_a" })
+    expect(await w.ended()).toMatchObject({ id })
+    put("failure", "walk", { selection_ref: sel, status: 404, unserved: "tool_a" }, W)
+    expect(rowsOfRoot()).toContain(id)
+  })
+
+  test("[GUARD] a failure on the root that is not this walk's own does not draw a served row in", async () => {
+    // a person's row citing the root's selection is the root's; one naming a shape unserved is not this walk's failure
+    const theirs = put("failure", "person", { unserved: "tool_b", input_refs: [sel] })
+    expect(rowsOfRoot()).toContain(theirs)
+    const w = waitOf(W)
+    const id = put("shape_served", "detector", { served: "tool_b" })
+    expect(await w.ended()).toBeUndefined()
+    expect(rowsOfRoot()).not.toContain(id)
+    put("world_changed", "person")
+    await w.p
   })
 
   test("[GUARD] the root stays open: a served row closes nothing", () => {
@@ -127,7 +152,7 @@ describe("the fold does not read it", () => {
 const status = (shape: string, role: string, fields: Record<string, unknown> = {}): number => store.write({ shape, ...fields }, `${role}-test`, role).status
 const waitFor = (deadline?: number) => {
   let got: unknown = "pending"
-  const p = store.wait([], store.lastSeq(), deadline, "walk-test").then((r) => { got = r })
+  const p = store.waitAsked({ shapes: [], after_seq: store.lastSeq(), episode: "walk-test", ...(deadline === undefined ? {} : { until: deadline }) }).then((r) => { got = r })
   return { p, now: () => got }
 }
 
@@ -171,12 +196,14 @@ describe("the owner's bound on a wait", () => {
     expect(answered.now()).toMatchObject({ shape: "world_changed" })
   })
 
-  test("[GUARD] a wait_bound that is not a positive number bounds nothing", async () => {
-    status("wait_bound", "owner", { within_ms: "30" })
-    const w = waitFor()
-    await Bun.sleep(80)
-    expect(w.now()).toBe("pending")
-    status("world_changed", "person")
-    await w.p
-  })
+  for (const within_ms of ["30", 0, -1]) {
+    test(`[GUARD] a wait_bound that is not a positive number (${JSON.stringify(within_ms)}) bounds nothing: no wait is answered at once`, async () => {
+      status("wait_bound", "owner", { within_ms })
+      const w = waitFor()
+      await Bun.sleep(80)
+      expect(w.now()).toBe("pending")
+      status("world_changed", "person")
+      await w.p
+    })
+  }
 })
