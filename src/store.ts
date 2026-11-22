@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
 import { deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
-import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing } from "./fold"
+import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE, WAIT_BOUND,
 } from "./shapes"
@@ -910,5 +910,22 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   }
   const matched = read(q)
   const kept = q.limit === undefined ? matched : matched.slice(-q.limit)
-  return withStanding(q.stored === true ? kept : factsOn(kept))
+  return withStanding(q.stored === true ? kept : withUse(factsOn(kept)))
+}
+
+// WHETHER WHAT A SELECTION MADE WAS USED is records' to say (fold.ts useGrades): a selection read is stamped use {r, key}
+// when the fold judged that selection by its use, and carries no use otherwise, whatever its writer put there. Derived
+// on read and never stored, as standing is, so a detector that classes unused output reads this stamp, never a copy of
+// the rule. Only on a plain read: the walk's episodes are answered as before.
+let useAt: { seq: number; of: Map<string, { r: number; key: string }> } | undefined
+const withUse = (out: Row[]): Row[] => {
+  if (!out.some((r) => r.shape === SELECTION)) return out
+  if (useAt?.seq !== seq) useAt = { seq, of: new Map(useGrades(rows, seq, seq).map((g) => [g.judged, { r: g.r, key: g.key }])) }
+  const of = useAt.of
+  return out.map((r) => {
+    if (r.shape !== SELECTION) return r
+    const { use: _u, ...rest } = r
+    const u = of.get(r.id)
+    return (u === undefined ? rest : { ...rest, use: u }) as Row
+  })
 }
