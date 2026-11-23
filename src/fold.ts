@@ -1057,14 +1057,8 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
       list(byAsker.get(p.move)!, p.asker, k)
     }
   }
-  // The owner's start for a move no level has a record for, indexed once per read as the grades are: the latest prior
-  // row for each kind, and the latest default.
-  const kindPrior = new Map<string, Row>()
-  let defaultPrior: Row | undefined
-  for (const r of priors) {
-    if (typeof r.kind === "string") kindPrior.set(r.kind, r)
-    if (r.default === true) defaultPrior = r
-  }
+  // The owner's start for a move no level has a record for, found once per read: the latest default prior row.
+  const defaultPrior = priors.filter((r) => r.default === true).at(-1)
   const anyCell = latest.some((k) => k.cells.size > 0)
   if (anyCell) for (const c of cells) part(c)
   return cells.map((c) => {
@@ -1102,16 +1096,13 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     const scale = cap === undefined ? 1 : Math.min(1, cap / Math.max(got.wins + got.losses, 1e-9))
     // A MOVE NEVER GRADED STARTS FROM ITS KIND'S RECORD, ELSE THE OWNER'S WORD (USER ruling 11-23, a never-run move starts
     // from its kind's record, else the owner's p0). A cell with no grades of its own whose move has none at the asker or
-    // move level takes its kind's record (the last level above); with none, the owner's prior row for its kind (prior
-    // {kind, alpha0, beta0}), else the owner's default (prior {default: true, alpha0, beta0}), the latest of each. A 1/1
-    // drawn for every move never tried outdrew every move with a record (most of them mostly failure), so untried moves
-    // won nearly every draw. A cell with grades of its own is a move that has run: it inherits as before, and neither its
-    // kind's record nor the owner's start reaches it. With no owner row at all the start is 1/1, as before.
-    // A query cell that is not a string has no kind; only the default can start it.
-    const start = (): { alpha: number; beta: number } => {
-      const r = (typeof c === "string" ? kindPrior.get(kindOf(c)) : undefined) ?? defaultPrior
-      return r === undefined ? p0 : { alpha: Number(r.alpha0), beta: Number(r.beta0) }
-    }
+    // move level takes its kind's record (the last level above); when its kind has none either, the owner's default
+    // (prior {default: true, alpha0, beta0}, the latest). A 1/1 drawn for every move never tried outdrew every move with
+    // a record (most of them mostly failure), so untried moves won nearly every draw. A cell with grades of its own is a
+    // move that has run: it inherits as before, and neither its kind's record nor the owner's start reaches it. With no
+    // default row the start is 1/1, as before.
+    const start = (): { alpha: number; beta: number } =>
+      defaultPrior === undefined ? p0 : { alpha: Number(defaultPrior.alpha0), beta: Number(defaultPrior.beta0) }
     const base = own.length > 0 ? p0 : coarse === "none" && mine.length === 0 ? start() : { alpha: p0.alpha + got.wins * scale, beta: p0.beta + got.losses * scale }
     const self = sum(mine, "cell")
     return { cell: c, alpha: base.alpha + self.wins, beta: base.beta + self.losses, from: mine.length > 0 ? "cell" : coarse }
