@@ -1111,3 +1111,70 @@ describe("what the walk does not read back of its own rows", () => {
     }
   })
 })
+
+// Asked for (arm: "beside"), the walk's arm comes after the open roots too, so a rhythm counted against the store's head
+// runs while requests stay open: handed only when nothing was open, a detector's rhythm never ran while any root was.
+describe("the walk's arm beside open roots", () => {
+  const beside = async (r: Awaited<ReturnType<typeof fresh>>) =>
+    (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", arm: "beside" })) as
+      { shared: Array<{ id: string }>; roots: Array<{ root: { id: string }; rows: Array<{ id: string }>; awaits: boolean }> }
+
+  test("[MUST-FAIL] with a request open, the newest arm comes after it, awaited by no one, with its own rows", async () => {
+    const r = await fresh()
+    await r.arm()
+    const arm = await r.arm()
+    await r.write(NODE_KEY, { shape: "arm", vessel_id: "another-walk", arm: "treated" }, owner) // another walker's
+    const ran = await r.select(arm.id)
+    const a = await r.ask("hello")
+    const all = (await beside(r)) as any
+    expect(all.roots.map((x: any) => x.root.id)).toEqual([a.id, arm.id])
+    expect(all.roots.map((x: any) => x.awaits)).toEqual([true, false])
+    expect(all.roots[1].rows.map((x: any) => x.id)).toContain(ran.id)
+    expect(all.roots[0].rows.map((x: any) => x.id)).not.toContain(ran.id)
+  })
+
+  test("[MUST-FAIL] beside an open gap too", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const g = await r.write(NODE_KEY, { shape: "gap", gap_id: "g9", status: "open", summary: "a check fails" }, { writer: "pull-sync", role: "detector" })
+    const all = await beside(r)
+    expect(all.roots.map((x) => x.root.id)).toEqual([g.id, arm.id])
+  })
+
+  test("[GUARD] with nothing open the arm is the one root, once", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    expect((await beside(r)).roots.map((x) => x.root.id)).toEqual([arm.id])
+  })
+
+  test("[GUARD] with no arm row, the open roots alone", async () => {
+    const r = await fresh()
+    const a = await r.ask("hello")
+    expect((await beside(r)).roots.map((x) => x.root.id)).toEqual([a.id])
+  })
+
+  test("[GUARD] an arm row another role offers is no arm (an owner shape, refused to others): the open roots alone", async () => {
+    const r = await fresh()
+    await r.write(NODE_KEY, { shape: "arm", vessel_id: WALK, arm: "treated" }, { writer: "pull-sync", role: "detector" })
+    const a = await r.ask("hello")
+    expect((await beside(r)).roots.map((x) => x.root.id)).toEqual([a.id])
+  })
+
+  test("[GUARD] not asked for, the answer is as it was: the open roots alone", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("hello")
+    expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([a.id])
+  })
+
+  test("[GUARD] the single episode read is unchanged: the oldest open request's rows, never the arm", async () => {
+    const r = await fresh()
+    const arm = await r.arm()
+    const ran = await r.select(arm.id)
+    const a = await r.ask("hello")
+    const ep = await r.episode()
+    expect(ep).toContain(a.id)
+    expect(ep).not.toContain(arm.id)
+    expect(ep).not.toContain(ran.id)
+  })
+})

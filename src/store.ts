@@ -32,6 +32,8 @@ export type Query = {
   limit?: number
   // Fields of rows the reader wrote itself that it does not read back, by shape: left out of its episodes answer (omitting).
   omit?: Record<string, string[]>
+  // "beside": the walk's newest arm after the open roots too, on the episodes read (episodes).
+  arm?: string
 }
 
 const MINE = new Set([SELECTION, HOP, FAILURE])
@@ -227,14 +229,17 @@ const openGaps = (from: Row[]): Row[] => {
 // The asks the owner declares (asks.ts declaredAsks), over the whole store.
 const askShapes = (): Set<string> | undefined => declaredAsks(rows)
 
+// The walk's newest arm: the owner's row naming this walker.
+const armOf = (w: string): Row[] =>
+  rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w).slice(-1)
+
 const openRoots = (w: string): Row[] => {
   const done = closed()
   const declared = askShapes()
   const open = [...rows.filter((r) => isAsk(r, declared)).filter((r) => !done.has(r.id)), ...openGaps(rows)]
     .sort((a, b) => a.seq - b.seq)
   if (open.length > 0) return open
-  const arms = rows.filter((r) => r.shape === ARM).filter((r) => r.role === OWNER).filter((r) => String(r.vessel_id) === w)
-  return arms.slice(-1)
+  return armOf(w)
 }
 
 // The rows descended from one root: it, the walk's selections whose pool held it, their hops and failures, the
@@ -456,8 +461,15 @@ export const episode = (w: string): Row[] => {
 // producer's row with within_ms and the at records stamped, citing an ask). Every one counts ("Later deadlines close
 // it"), so the walk bounds a wait by the next one ahead and reads one passed from here, rather than keep its own copy
 // of which deadline is the request's: two copies of one rule drift.
-export const episodes = (w: string): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean; dues: number[] }> } => {
-  const roots = openRoots(w)
+// Asked for (beside), the walk's newest arm comes after the open roots too, when any is open: a rhythm the owner
+// schedules is counted against the store's head, never against idling, so handed only when nothing was open its runs
+// never came while a request or gap stayed open. Its rows (its last run among them) come with it, since a rhythm counts
+// from its last run. The walk offers the arm beside other roots only what its rhythms made due. Only a reader that asks
+// is given it, so every other reader's answer stays as it was; and the other readers of the open roots (a wait's shown
+// rows, which calls are open work) are unchanged: the arm beside them is no work of a root.
+export const episodes = (w: string, beside = false): { shared: Row[]; roots: Array<{ root: Row; rows: Row[]; awaits: boolean; dues: number[] }> } => {
+  const open = openRoots(w)
+  const roots = !beside || open.some((r) => r.shape === ARM) ? open : [...open, ...armOf(w)]
   const found = rootRows(w, roots)
   const byId = new Map(rows.map((r) => [r.id, r]))
   const declared = askShapes()
@@ -882,7 +894,7 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
   // without its standing reads as a grade that counted, even one the fold refused.
   if (q.episode !== undefined) {
     if (q.roots !== "all") return projected(withStanding(episode(q.episode)))
-    const all = episodes(q.episode)
+    const all = episodes(q.episode, q.arm === "beside")
     const thin = omitting(q.omit, q.episode)
     return { shared: thin(projected(withStanding(all.shared))), roots: all.roots.map((x) => ({ ...x, rows: thin(projected(withStanding(x.rows))) })) }
   }
