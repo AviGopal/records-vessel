@@ -50,6 +50,14 @@ describe("a call offered with no request consumed the row it was bound from", ()
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[1, RUN_CELL]])
   })
 
+  test("[MUST-FAIL] a from that names no request (null, a number) is fromless: it consumed its frontier, as the walk reads it", () => {
+    for (const from of [null, 7]) {
+      const b = build((commit) => ({ ...chained(commit), from }))
+      const got = F.reached(F.indexOf(b.rows), b.diffSel.id, CREDITS, { by: "person", r: 1 })
+      expect([from, got.get(b.runSel.id)]).toEqual([from, 0.5])
+    }
+  })
+
   test("[GUARD] a call a request asked for consumed the request only, even carrying a frontier", () => {
     const b = build((commit) => ({ ...chained(commit), from: "request-asked" }))
     const got = F.reached(F.indexOf(b.rows), b.diffSel.id, CREDITS, { by: "person", r: 1 })

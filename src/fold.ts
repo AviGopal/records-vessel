@@ -180,8 +180,9 @@ const consumedOf = (index: Index): ((sel: Row) => string[]) => {
     // A call a request asked for consumed the request. A call offered with no request (the step a gated call's chain
     // names, bound from the root's newest made row) consumed that row, which the selection names as its frontier: read
     // as consuming nothing, a grade on what the call made would stop at the call and never reach the row's maker.
+    // A from that is not a string names no request, and the call is read as fromless, as the walk reads it.
     if (a.startsWith("call/")) {
-      if (sel.from !== undefined) return [String(sel.from)]
+      if (typeof sel.from === "string") return [sel.from]
       const took = (sel.frontier as { id?: unknown } | undefined)?.id
       return took === undefined ? [] : [String(took)]
     }
