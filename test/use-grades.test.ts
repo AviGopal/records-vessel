@@ -401,6 +401,11 @@ describe("a call takes what was offered to it: read from the offer, not from a c
     const r = b.run(); b.offer(r.out, { calls: ["fs_edit", "git_commit"] }); b.call(); b.filler()
     expect(runOnly(b.rows)).toEqual([[1, RUN_CELL]])
   })
+  test("[GUARD] an offer of three calls: a call of the middle one takes it → r 1", () => {
+    const b = build()
+    const r = b.run(); b.offer(r.out, { calls: ["code_replace_lines", "git_commit", "git_diff"] }); b.call(); b.filler()
+    expect(runOnly(b.rows)).toEqual([[1, RUN_CELL]])
+  })
   test("[GUARD] a call not among the calls offered is no take → r 0", () => {
     const b = build()
     const r = b.run(); b.offer(r.out); b.sel("call/git_diff", "call/git_diff|gitDiff,asker:person,age:0"); b.filler()
