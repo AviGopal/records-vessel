@@ -522,8 +522,14 @@ export const standing = (all: Row[], asOf: number, atSeq: number): Grade[] => la
 // A refusal the walk recorded as waiting for a person (waits_for: "person" on the failure row, lifted from git_land's
 // answer: the change touches what judges changes, and only a person's verdict lands it) is the gate working, not a
 // fault in what was asked: callee. Read from the row's field only, never from its body.
+// A root the walk said stalled again and again with nothing changing ends its attempt (ends: "stall", one row per
+// selection whose answer moved nothing, citing it): that answer was what was asked of it and it moved nothing, so the
+// row blames the request, read before any kind, and moveFailuresOf charges each such selection once, as any refused move
+// (the USER: "End the attempt"; one debit path, keyed by the selection, so a selection already charged is not charged
+// again).
 const NOT_THE_REQUEST = new Set([401, 403, 408, 429])
 export const blames = (f: Record<string, unknown>): "request" | "callee" | "walk" => {
+  if (f.ends === "stall") return "request"
   if (f.kind !== undefined) return "walk"
   if (f.waits_for === "person") return "callee"
   if (typeof f.unserved === "string" && f.unserved !== "") return "callee"
