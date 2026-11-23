@@ -900,10 +900,14 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 //     move's selections produced → r 1, once per request and move, on the cell of the first of its selections so used.
 //     A move's own later steps never count, so a move cannot earn by feeding itself, and a loop between two moves earns
 //     each one once: counted per take, two moves feeding each other would earn without end;
-//   - unused: N of the root's selections passed after one of its selections and nothing took it → r 0, once per such
-//     selection: each output nobody took is its own failure, so four idle runs of one move cost four, and a use of the
-//     move elsewhere on the request does not undo it;
-//   - otherwise (no window passed yet) → no grade.
+//   - unused: N of the root's selections passed after one of its selections, nothing took it, and a consumer of it was
+//     offered within them → r 0, once per such selection: each output nobody took is its own failure, so four idle runs
+//     of one move cost four, and a use of the move elsewhere on the request does not undo it. Offered: a later selection
+//     of the root within the window had a row this selection made as its frontier (the root's newest made row, which the
+//     walk writes on each selection) with calls that take it. An output no consumer was offered for is not its
+//     producer's miss but the walk's offer, which the missed-step gap reports, so it is not debited; nor is one judged
+//     on selections that carry no frontier;
+//   - otherwise (no window passed yet, or no consumer offered) → no grade.
 // Judged: treated, unfailed selections with a root that produced something: calls and runs (their tool answers), and
 // produces none of whose rows is a grade (a grader is judged by the marks on what it graded) or a deadline (a deadline
 // is judged by its lapse). A selection that made a promise is judged by the promise rule alone, the stronger
@@ -935,6 +939,13 @@ const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const m = made.get(s.id) ?? []
     return m.length > 0 && m.every((r) => !GRADE_SHAPES.has(String(r.shape)) && !isDeadline(r))
   }
+  const offered = (p: Row): boolean => {
+    const i = pos.get(p.id)!
+    return byRoot.get(String(p.root))!.slice(i + 1, i + 1 + n).some((c) => {
+      const f = c.frontier as Row | undefined
+      return typeof f?.id === "string" && byId.get(f.id)?.selection_ref === p.id && Array.isArray(c.calls) && c.calls.length > 0
+    })
+  }
   const used = new Set<string>()
   for (const c of sels.values()) {
     if (failed.has(c.id) || c.seq > asOf || typeof c.root !== "string") continue
@@ -957,7 +968,7 @@ const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       continue
     }
     const last = byRoot.get(String(p.root))![pos.get(p.id)! + n]
-    if (last === undefined || last.seq > asOf) continue
+    if (last === undefined || last.seq > asOf || !offered(p)) continue
     const key = `unused|${p.id}`
     out.set(key, { id: `unused:${p.id}`, ok: true, r: 0, judged: p.id, key, cells: new Set([cell]), weights: new Map([[cell, w]]), by: "use", deadline: false })
   }

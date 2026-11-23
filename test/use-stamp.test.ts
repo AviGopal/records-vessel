@@ -30,14 +30,20 @@ const ask = (what: string) => put({ shape: "world_changed", what }, "kid-person"
 const sel = (root: R, a: string, cell: string, extra: R = {}) =>
   put({ shape: "selection", arm: "treated", a, cell, root: root.id, ...extra }, "walk-test", "walk")
 const filler = (root: R) => sel(root, "wait-for", "wait-for|asker:person,age:0")
+// An edit's answer, and a later selection made over it as the root's frontier with calls that take it (a consumer
+// offered): an unused edit is debited only when one was.
+const answer = (s: R) => put({ shape: "fileEditResult", selection_ref: s.id }, "walk-test", "walk")
+const offer = (root: R, out: R) => sel(root, "wait-for", "wait-for|asker:person,age:0", { frontier: { id: out.id, shape: out.shape }, calls: ["git_commit"] })
+const idleEdit = (root: R) => { const s = sel(root, EDIT, EDIT_CELL); offer(root, answer(s)); return s }
 const selections = (ids: string[], stored = false): R[] => store.serveRead({ ids, ...(stored ? { stored: true } : {}) } as never) as R[]
 const useOf = (ids: string[], stored = false) => selections(ids, stored).map((r) => r.use)
 
-// Root A: an edit nobody takes, the window passed. Root B: an edit of the same move, its window not yet passed.
+// Root A: an edit nobody takes though a consumer was offered, the window passed. Root B: an edit of the same move, its window not yet passed.
 const A = ask("use stamp A"), B = ask("use stamp B")
 const editA = sel(A, EDIT, EDIT_CELL)
 const editB = sel(B, EDIT, EDIT_CELL)
-const fillA = filler(A); filler(A); filler(A)
+const answerB = answer(editB)
+const fillA = offer(A, answer(editA)); filler(A); filler(A)
 // Root D: an edit whose answer the commit (another move) took within the window.
 const D = ask("use stamp D")
 const editD = sel(D, EDIT, EDIT_CELL)
@@ -45,20 +51,20 @@ const result = put({ shape: "fileEditResult", selection_ref: editD.id }, "walk-t
 sel(D, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: result.id })
 // Root E: two edits nobody took, then an edit of the same move whose answer the commit took: each is its own judgment.
 const E = ask("use stamp E")
-const idleE = sel(E, EDIT, EDIT_CELL)
-const idleE2 = sel(E, EDIT, EDIT_CELL)
+const idleE = idleEdit(E)
+const idleE2 = idleEdit(E)
 const usedE = sel(E, EDIT, EDIT_CELL)
 const resultE = put({ shape: "fileEditResult", selection_ref: usedE.id }, "walk-test", "walk")
 sel(E, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: resultE.id })
 filler(E); filler(E); filler(E)
 // Root M: six edits of one move nobody took, then the window passes on each.
 const M = ask("use stamp M")
-const idleM = [0, 1, 2, 3, 4, 5].map(() => sel(M, EDIT, EDIT_CELL))
+const idleM = [0, 1, 2, 3, 4, 5].map(() => idleEdit(M))
 filler(M); filler(M); filler(M)
 // Root X: an edit nobody took, the window passed; root Z: an edit whose window has not passed; then, newer, root Y: an
 // edit of the same move whose answer the commit took.
 const X = ask("use stamp X"), Z = ask("use stamp Z"), Y = ask("use stamp Y")
-const idleX = sel(X, EDIT, EDIT_CELL); filler(X); filler(X); filler(X)
+const idleX = idleEdit(X); filler(X); filler(X)
 const openZ = sel(Z, EDIT, EDIT_CELL)
 const usedY = sel(Y, EDIT, EDIT_CELL)
 sel(Y, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: put({ shape: "fileEditResult", selection_ref: usedY.id }, "walk-test", "walk").id })
@@ -112,7 +118,7 @@ describe("a selection read says whether what it made was used", () => {
     expect(useOf([editA.id, forged.id], true)).toEqual([undefined, { r: 0, key: "forged" }])
   })
   test("[MUST-FAIL] a window that passes after an earlier read is read: the stamp follows the store", () => {
-    filler(B); filler(B); filler(B)
+    offer(B, answerB); filler(B); filler(B)
     expect(useOf([editB.id])).toEqual([{ r: 0, key: `unused|${editB.id}` }])
   })
 })

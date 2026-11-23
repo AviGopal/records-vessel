@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // A move's output that another move takes as input earns; one nobody takes costs, at the owner's w_check: used within
 // the owner's promise_window → r 1, once per request and move; each selection whose output nobody took within it → its
-// own r 0, which a later use does not undo. The rows here are the shapes the walk, described-shape and the owner write.
+// own r 0, which a later use does not undo, when a consumer of it was offered within the window (a later selection's
+// frontier was its row, with calls that take it); with none offered, no grade. The rows here are the shapes the walk, described-shape and the owner write.
 import { describe, expect, test } from "bun:test"
 import * as F from "../src/fold"
 import type { Row } from "../src/store"
@@ -20,6 +21,8 @@ const CREDITS = { target: "selection", w_person: 1, w_lapse: 1, w_close: 1, gamm
 const use = (rows: Row[], asOf = 1e9): Array<[number, string]> =>
   (((F as Record<string, unknown>).useGrades as typeof F.useGrades | undefined)?.(rows, asOf, 1e9) ?? []).map((g) => [g.r, [...g.cells][0]!])
 const post = (rows: Row[], cell: string) => F.foldFrom(rows, [cell], 1e9, 1e9)[0]
+
+const offerOf = (out: Row) => ({ frontier: { id: out.id, shape: out.shape }, calls: ["git_commit"] })
 
 const build = (credits: Record<string, unknown> = CREDITS) => {
   seq = 0
@@ -51,15 +54,17 @@ const build = (credits: Record<string, unknown> = CREDITS) => {
     return { s, out }
   }
   // a selection of another move that produced nothing
-  const filler = () => sel("wait-for", "wait-for|asker:person,age:0")
+  const filler = (fields: Record<string, unknown> = {}) => sel("wait-for", "wait-for|asker:person,age:0", fields)
+  // such a selection made over a row as the root's frontier, with calls that take it: a consumer of the row was offered
+  const offer = (out: Row, fields: Record<string, unknown> = {}) => filler({ ...offerOf(out), ...fields })
   const fail = (s: Row) => add(row("failure", "walk", { selection_ref: s.id, status: 500 }))
-  return { rows, add, ask, sel, run, plan, note, filler, fail }
+  return { rows, add, ask, sel, run, plan, note, filler, offer, fail }
 }
 
 describe("a move's output, judged by its use within the window", () => {
   test("[MUST-FAIL] a run whose answer nobody takes, the window passed → r 0 on its cell at w_check", () => {
     const b = build()
-    b.run(); b.filler(); b.filler(); b.filler()
+    const r = b.run(); b.offer(r.out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([[0, RUN_CELL]])
     expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1.5 })
   })
@@ -74,21 +79,23 @@ describe("a move's output, judged by its use within the window", () => {
   test("[MUST-FAIL] a call whose request nobody takes is judged like a run: r 0 after the window", () => {
     const b = build()
     const req = b.add(row("request", "described", { pointer: { type: "fs_read" } }))
-    b.sel("call/fs_read", CALL_CELL, { from: req.id }); b.filler(); b.filler(); b.filler()
+    const c = b.sel("call/fs_read", CALL_CELL, { from: req.id })
+    const ans = b.add(row("fileContent", "walk", { selection_ref: c.id }))
+    b.offer(ans); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([[0, CALL_CELL]])
   })
 
   test("[MUST-FAIL] each idle run is its own failure: five idle runs cost five r 0, not one", () => {
     const b = build()
-    for (let i = 0; i < 5; i++) b.run()
-    b.filler(); b.filler(); b.filler()
+    for (let i = 0; i < 5; i++) b.offer(b.run().out)
+    b.filler(); b.filler()
     expect(use(b.rows)).toEqual([0, 1, 2, 3, 4].map(() => [0, RUN_CELL]))
     expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 + 5 * 0.5 })
   })
 
   test("[MUST-FAIL] idle runs in two cells cost an r 0 each, each on its own cell", () => {
     const b = build()
-    b.run(); b.run({ cell: "run/tmpl|request,asker:person,age:1" }); b.filler(); b.filler(); b.filler()
+    b.offer(b.run().out); b.offer(b.run({ cell: "run/tmpl|request,asker:person,age:1" }).out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([[0, RUN_CELL], [0, "run/tmpl|request,asker:person,age:1"]])
     // its own r 0, and the other cell's r 0 inherited at the move's asker level
     expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 + 0.5 + 0.5 })
@@ -99,13 +106,13 @@ describe("a move's output, judged by its use within the window", () => {
     const other = b.add(row("world_changed", "person", { what: "another ask" }))
     const r = b.run(); b.plan([r.out])
     const on = { root: other.id }
-    b.run(on); b.sel("wait-for", "wait-for|asker:person,age:0", on); b.sel("wait-for", "wait-for|asker:person,age:0", on); b.sel("wait-for", "wait-for|asker:person,age:0", on)
+    b.offer(b.run(on).out, on); b.sel("wait-for", "wait-for|asker:person,age:0", on); b.sel("wait-for", "wait-for|asker:person,age:0", on)
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL).sort()).toEqual([[0, RUN_CELL], [1, RUN_CELL]])
   })
 
   test("[MUST-FAIL] a row list that grows is read again: the window that passes on the new row is seen", () => {
     const b = build()
-    b.run(); b.filler(); b.filler()
+    b.offer(b.run().out); b.filler()
     expect(use(b.rows)).toEqual([])
     b.filler()
     expect(use(b.rows)).toEqual([[0, RUN_CELL]])
@@ -113,7 +120,7 @@ describe("a move's output, judged by its use within the window", () => {
 
   test("[MUST-FAIL] one row list read at two at_seq: each read sees only the rows up to its own", () => {
     const b = build()
-    const r = b.run(); b.filler(); b.filler(); b.filler()
+    const r = b.run(); b.offer(r.out); b.filler(); b.filler()
     const at = (atSeq: number) => (((F as Record<string, unknown>).useGrades as typeof F.useGrades | undefined)?.(b.rows, 1e9, atSeq) ?? []).map((g) => [g.r, [...g.cells][0]!])
     expect(at(1e9)).toEqual([[0, RUN_CELL]])
     expect(at(r.out.seq)).toEqual([]) // no selection after the run yet: no window has passed
@@ -122,8 +129,8 @@ describe("a move's output, judged by its use within the window", () => {
 
   test("[MUST-FAIL] selections of any arm on the request count toward the window, as a promise's window counts them", () => {
     const b = build()
-    b.run()
-    for (let i = 0; i < 3; i++) b.sel("wait-for", "wait-for|asker:person,age:0", { arm: "control" })
+    const r = b.run()
+    for (let i = 0; i < 3; i++) b.sel("wait-for", "wait-for|asker:person,age:0", { arm: "control", ...(i === 0 ? offerOf(r.out) : {}) })
     expect(use(b.rows)).toEqual([[0, RUN_CELL]])
   })
 
@@ -141,21 +148,21 @@ describe("a move's output, judged by its use within the window", () => {
     const s = b.sel("produce/plan/ch1", PLAN_CELL)
     b.add(row("plan", "described", { selection_ref: s.id, input_refs: [] }))
     b.add(row("due", "described", { selection_ref: s.id, within_ms: 60_000, at: 1e15, input_refs: [b.ask.id] }))
-    b.run(); b.filler(); b.filler(); b.filler()
+    b.offer(b.run().out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([[0, RUN_CELL]])
   })
 
   test("[GUARD] a credits row with a window but no w_check judges nothing, and posts stay the parent's", () => {
     const { w_check: _, ...rest } = CREDITS
     const b = build({ ...rest })
-    b.run(); b.filler(); b.filler(); b.filler()
+    b.offer(b.run().out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([])
     expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 })
   })
 
   test("[MUST-FAIL] a later use does not undo an idle run's r 0: an idle run, then a run of the same move that is used → r 0 and r 1", () => {
     const b = build()
-    b.run(); b.filler(); b.filler(); b.filler()
+    b.offer(b.run().out); b.filler(); b.filler()
     const r = b.run(); b.plan([r.out])
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[0, RUN_CELL], [1, RUN_CELL]])
   })
@@ -163,13 +170,13 @@ describe("a move's output, judged by its use within the window", () => {
   test("[MUST-FAIL] an idle repeat of a used move costs its own r 0", () => {
     const b = build()
     const r = b.run(); b.plan([r.out])
-    b.run(); b.filler(); b.filler(); b.filler()
+    b.offer(b.run().out); b.filler(); b.filler()
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[1, RUN_CELL], [0, RUN_CELL]])
   })
 
   test("[MUST-FAIL] a take after the window does not count: the run is unused", () => {
     const b = build()
-    const r = b.run(); b.filler(); b.filler(); b.filler(); b.plan([r.out])
+    const r = b.run(); b.offer(r.out); b.filler(); b.filler(); b.plan([r.out])
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[0, RUN_CELL]])
   })
 
@@ -195,13 +202,13 @@ describe("a move's output, judged by its use within the window", () => {
 
   test("[MUST-FAIL] a take by a failed selection is no use: the run is unused once the window passes", () => {
     const b = build()
-    const r = b.run(); const c = b.plan([r.out]); b.fail(c.s); b.filler(); b.filler()
+    const r = b.run(); const c = b.plan([r.out], PLAN_CELL, offerOf(r.out)); b.fail(c.s); b.filler(); b.filler()
     expect(use(b.rows).filter(([, x]) => x === RUN_CELL)).toEqual([[0, RUN_CELL]])
   })
 
   test("[GUARD] a failed run is judged by its failure, never by use", () => {
     const b = build()
-    const r = b.run(); b.fail(r.s); b.filler(); b.filler(); b.filler()
+    const r = b.run(); b.fail(r.s); b.offer(r.out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([])
   })
 
@@ -218,7 +225,7 @@ describe("a move's output, judged by its use within the window", () => {
     const r = b.run() // position 0 on this request
     b.sel("wait-for", "wait-for|asker:person,age:0", { root: other.id })
     b.plan([r.out], PLAN_CELL, { root: other.id }) // position 1 on the other request
-    b.filler(); b.filler(); b.filler()
+    b.offer(r.out); b.filler(); b.filler()
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[0, RUN_CELL]])
   })
 
@@ -227,7 +234,7 @@ describe("a move's output, judged by its use within the window", () => {
     const early = b.sel("produce/plan/ch1", PLAN_CELL)
     const r = b.run()
     b.add(row("plan", "described", { selection_ref: early.id, input_refs: [r.out.id] }))
-    b.filler(); b.filler(); b.filler()
+    b.offer(r.out); b.filler(); b.filler()
     expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[0, RUN_CELL]])
   })
 
@@ -246,20 +253,20 @@ describe("a move's output, judged by its use within the window", () => {
 
   test("[GUARD] untreated selections and selections with no request are not judged", () => {
     const b = build()
-    b.run({ arm: "control" }); b.run({ root: undefined }); b.filler(); b.filler(); b.filler()
+    b.offer(b.run({ arm: "control" }).out); b.run({ root: undefined }); b.filler(); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([])
   })
 
   test("[GUARD] with no promise window on the credits row, nothing is judged", () => {
     const { promise_window: _, ...rest } = CREDITS
     const b = build(rest)
-    b.run(); b.filler(); b.filler(); b.filler()
+    b.offer(b.run().out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([])
   })
 
   test("[GUARD] judged as of: nothing past as_of is a taker or a passed window", () => {
     const b = build()
-    b.run(); const f1 = b.filler(); b.filler(); b.filler()
+    const f1 = b.offer(b.run().out); b.filler(); b.filler()
     expect(use(b.rows, f1.seq)).toEqual([]) // the window had not passed yet
     const c = build()
     const r = c.run(); const at = c.filler(); c.plan([r.out])
@@ -291,6 +298,59 @@ describe("a move's output, judged by its use within the window", () => {
     b.add(row("failure", "walk", { selection_ref: land.id, call_id: "cw", status: 409, waits_for: "person", input_refs: [land.id] }))
     b.filler(); b.filler(); b.filler()
     expect(F.promiseGrades(b.rows, 1e9, 1e9)).toMatchObject([{ ok: false, r: 0, refused: "person_wait", judged: s0.id }])
+    expect(use(b.rows)).toEqual([])
+  })
+})
+
+describe("an unused output is debited only when a consumer of it was offered (USER ruling 11-22)", () => {
+  test("[MUST-FAIL] not offered: the window passes, nothing took the run's answer, and no later selection was offered a consumer of it → no grade", () => {
+    const b = build()
+    b.run(); b.filler(); b.filler(); b.filler()
+    expect(use(b.rows)).toEqual([])
+    expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 })
+  })
+  test("[GUARD] offered and not taken: a later selection had the answer as its frontier with calls that take it → r 0", () => {
+    const b = build()
+    const r = b.run(); b.filler(); b.offer(r.out); b.filler()
+    expect(use(b.rows)).toEqual([[0, RUN_CELL]])
+  })
+  test("[GUARD] offered and taken → r 1, once per request and move", () => {
+    const b = build()
+    const r0 = b.run(); b.offer(r0.out); b.plan([r0.out])
+    const r1 = b.run(); b.offer(r1.out); b.plan([r1.out])
+    expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[1, RUN_CELL]])
+  })
+  test("[MUST-FAIL] the frontier was the answer but no call takes it (widened) → no grade", () => {
+    const b = build()
+    const r = b.run(); b.filler({ frontier: { id: r.out.id, shape: r.out.shape }, frontier_widened: true }); b.filler(); b.filler()
+    expect(use(b.rows)).toEqual([])
+  })
+  test("[MUST-FAIL] another root's selection offered a consumer of this run's answer: no offer on this root → no grade", () => {
+    const b = build()
+    const other = b.add(row("world_changed", "person", { what: "another ask" }))
+    const r = b.run()
+    b.offer(r.out, { root: other.id })
+    b.filler(); b.filler(); b.filler()
+    expect(use(b.rows)).toEqual([])
+  })
+  test("[MUST-FAIL] another output of the same shape was offered: only the run whose own answer was offered is debited", () => {
+    const b = build()
+    const first = b.run()
+    const second = b.run({ cell: "run/tmpl|request,asker:person,age:1" })
+    b.offer(second.out); b.filler(); b.filler()
+    expect(first.out.shape).toBe(second.out.shape)
+    expect(use(b.rows)).toEqual([[0, "run/tmpl|request,asker:person,age:1"]])
+  })
+  test("[MUST-FAIL] an output of another shape was offered: the run whose answer was not offered is not debited", () => {
+    const b = build()
+    b.run()
+    const p = b.plan([]) // a plan nothing takes, offered next
+    b.offer(p.out); b.filler(); b.filler()
+    expect(use(b.rows)).toEqual([[0, PLAN_CELL]])
+  })
+  test("[MUST-FAIL] an offer after the window does not count: the window passed with none → no grade", () => {
+    const b = build()
+    const r = b.run(); b.filler(); b.filler(); b.filler(); b.offer(r.out)
     expect(use(b.rows)).toEqual([])
   })
 })

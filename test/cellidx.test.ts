@@ -10,6 +10,9 @@
 // Its levels entry was written again by the same runner when the fold gained the use grade: levels is the one store
 // whose credits row carries a promise weight and window, so its posts now include the use grades; with them left out,
 // every store's answers were the earlier snapshot's, bit for bit.
+// Its levels entry was written again by the same runner when an unused output came to be debited only where a consumer of
+// it was offered: levels' selections carry no frontier, so its unused grades fall away; the entry is the parent's answers
+// with those grades left out, bit for bit, and every other store's answers are unchanged.
 import { describe, expect, test } from "bun:test"
 import * as F from "../src/fold"
 import type { Row } from "../src/store"
