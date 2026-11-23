@@ -449,8 +449,27 @@ describe("a cell with no evidence of its own backs off to a coarser one", () => 
   })
 
   test("[MUST-FAIL] an owner prior row for a kind is not read: no writer makes one, and the kind's own record is the kind's start", () => {
-    const rows = [...graded(cell("hop"), 1), prior({ kind: "run", alpha0: 1, beta0: 9 }), prior({ default: true, alpha0: 1, beta0: 7 })]
+    const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 7 }), prior({ kind: "run", alpha0: 1, beta0: 9 })]
     expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1, beta: 7, from: "none" })
+  })
+
+  test("a default prior row not written by the owner is not the start (a guard)", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 7 }), row("prior", "walk", { default: true, alpha0: 3, beta0: 5 })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1, beta: 7, from: "none" })
+  })
+
+  test("an owner default written after the fold's point is not read by it (a guard)", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 7 })]
+    const asOf = seq
+    const later = prior({ default: true, alpha0: 3, beta0: 5 })
+    expect(F.foldFrom([ask, ...rows, later], [RUN], asOf, asOf)[0]).toEqual({ cell: RUN, alpha: 1, beta: 7, from: "none" })
+  })
+
+  test("[MUST-FAIL] a later default row naming a cell is that cell's own prior and changes no other cell's start", () => {
+    const CALL = "call/tool|hop,asker:person,age:0"
+    const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 7 }), prior({ default: true, cell: RUN, alpha0: 3, beta0: 2 })]
+    expect(full(rows, CALL)).toEqual({ cell: CALL, alpha: 1, beta: 7, from: "none" })
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 3, beta: 2, from: "none" })
   })
 
   test("a cell with grades of its own is a move that has run: neither its kind's record nor the owner's start reaches it (a guard)", () => {
