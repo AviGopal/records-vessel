@@ -15,6 +15,8 @@ const RUN_CELL = "run/tmpl|request,asker:person,age:0"
 const PLAN_CELL = "produce/plan/ch1|request,asker:person,age:0"
 const NOTE_CELL = "produce/note/ch1|plan,asker:person,age:0"
 const CALL_CELL = "call/fs_read|request,asker:person,age:0"
+const COMMIT_CELL = "call/git_commit|gitDiff,asker:person,age:0"
+const AGE1 = "run/tmpl|request,asker:person,age:1"
 const CREDITS = { target: "selection", w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.5, depth: 4, w_check: 0.5, promise_window: 3 }
 
 // The use grades of the rows (none where the fold has no use grade), and a cell's posterior.
@@ -58,7 +60,9 @@ const build = (credits: Record<string, unknown> = CREDITS) => {
   // such a selection made over a row as the root's frontier, with calls that take it: a consumer of the row was offered
   const offer = (out: Row, fields: Record<string, unknown> = {}) => filler({ ...offerOf(out), ...fields })
   const fail = (s: Row) => add(row("failure", "walk", { selection_ref: s.id, status: 500 }))
-  return { rows, add, ask, sel, run, plan, note, filler, offer, fail }
+  // a call of git_commit (the call offerOf offers), citing nothing it worked on
+  const call = (fields: Record<string, unknown> = {}) => sel("call/git_commit", COMMIT_CELL, fields)
+  return { rows, add, ask, sel, run, plan, note, filler, offer, fail, call }
 }
 
 describe("a move's output, judged by its use within the window", () => {
@@ -200,10 +204,10 @@ describe("a move's output, judged by its use within the window", () => {
     expect(use(b.rows)).toEqual([])
   })
 
-  test("[MUST-FAIL] a take by a failed selection is no use: the run is unused once the window passes", () => {
+  test("[MUST-FAIL] a take by a failed selection is a use (a refused take counts as used): r 1, its failure charged through its own chain", () => {
     const b = build()
     const r = b.run(); const c = b.plan([r.out], PLAN_CELL, offerOf(r.out)); b.fail(c.s); b.filler(); b.filler()
-    expect(use(b.rows).filter(([, x]) => x === RUN_CELL)).toEqual([[0, RUN_CELL]])
+    expect(use(b.rows).filter(([, x]) => x === RUN_CELL)).toEqual([[1, RUN_CELL]])
   })
 
   test("[GUARD] a failed run is judged by its failure, never by use", () => {
@@ -362,5 +366,66 @@ describe("an unused output is debited only when a consumer of it was offered (US
     const b = build()
     const r = b.run(); b.filler(); b.filler(); b.filler(); b.offer(r.out)
     expect(use(b.rows)).toEqual([])
+  })
+})
+
+describe("a call takes what was offered to it: read from the offer, not from a citation", () => {
+  const runOnly = (rows: Row[], asOf?: number) => use(rows, asOf).filter(([, c]) => c === RUN_CELL || c === AGE1)
+  test("[MUST-FAIL] offered, then a row of the walk's own between, then the call → r 1", () => {
+    const b = build()
+    const r = b.run(); b.offer(r.out); b.filler({ frontier: { id: "attempt-1", shape: "attempt_explanation" } }); b.call(); b.filler()
+    expect(runOnly(b.rows)).toEqual([[1, RUN_CELL]])
+  })
+  test("[MUST-FAIL] offered, then a newer output, then the call → the offered run is used", () => {
+    const b = build()
+    const r = b.run(); b.offer(r.out); b.run({ cell: AGE1 }); b.call(); b.filler()
+    expect(runOnly(b.rows)).toEqual([[1, RUN_CELL]])
+  })
+  test("[MUST-FAIL] taken and refused → r 1 (a refused take counts as used)", () => {
+    const b = build()
+    const r = b.run(); b.offer(r.out); b.fail(b.call()); b.filler()
+    expect(runOnly(b.rows)).toEqual([[1, RUN_CELL]])
+  })
+  test("[MUST-FAIL] the offer's own selection is the call → r 1", () => {
+    const b = build()
+    const r = b.run(); b.call(offerOf(r.out)); b.filler(); b.filler()
+    expect(runOnly(b.rows)).toEqual([[1, RUN_CELL]])
+  })
+  test("[MUST-FAIL] another output was offered: the call took that one, not this run's", () => {
+    const b = build()
+    b.run(); const second = b.run({ cell: AGE1 }); b.offer(second.out); b.call(); b.filler(); b.filler()
+    expect(runOnly(b.rows)).toEqual([[1, AGE1]])
+  })
+  test("[GUARD] a call not among the calls offered is no take → r 0", () => {
+    const b = build()
+    const r = b.run(); b.offer(r.out); b.sel("call/git_diff", "call/git_diff|gitDiff,asker:person,age:0"); b.filler()
+    expect(runOnly(b.rows)).toEqual([[0, RUN_CELL]])
+  })
+  test("[GUARD] a call on another root is no take here → r 0", () => {
+    const b = build()
+    const other = b.add(row("world_changed", "person", { what: "another ask" }))
+    const r = b.run(); b.offer(r.out); b.filler({ root: other.id }); b.filler({ root: other.id }); b.call({ root: other.id }); b.filler(); b.filler()
+    expect(runOnly(b.rows)).toEqual([[0, RUN_CELL]])
+  })
+  test("[GUARD] a call after the window is no take → r 0", () => {
+    const b = build()
+    const r = b.run(); b.offer(r.out); b.filler(); b.filler(); b.call()
+    expect(runOnly(b.rows)).toEqual([[0, RUN_CELL]])
+  })
+  test("[GUARD] a call before the offer is no take of it → r 0", () => {
+    const b = build()
+    const r = b.run(); b.call(); b.offer(r.out); b.filler()
+    expect(runOnly(b.rows)).toEqual([[0, RUN_CELL]])
+  })
+  test("[GUARD] a call of the same move as the offered output's maker is no take → r 0", () => {
+    const b = build()
+    const p = b.call(); const out = b.add(row("gitCommitResult", "walk", { selection_ref: p.id }))
+    b.offer(out); b.call(); b.filler()
+    expect(use(b.rows).filter(([, c]) => c === COMMIT_CELL)).toEqual([[0, COMMIT_CELL]])
+  })
+  test("[GUARD] a call after asOf is not yet a take → no grade at asOf", () => {
+    const b = build()
+    const r = b.run(); const o = b.offer(r.out); b.call(); b.filler()
+    expect(runOnly(b.rows, o.seq)).toEqual([])
   })
 })

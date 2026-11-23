@@ -53,6 +53,8 @@ sel(D, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", {
 const E = ask("use stamp E")
 const idleE = idleEdit(E)
 const idleE2 = idleEdit(E)
+// past idleE2's window before the commit: a commit within it would be a take of its offer, matched by the call's kind
+filler(E)
 const usedE = sel(E, EDIT, EDIT_CELL)
 const resultE = put({ shape: "fileEditResult", selection_ref: usedE.id }, "walk-test", "walk")
 sel(E, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: resultE.id })

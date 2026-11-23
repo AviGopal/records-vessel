@@ -896,8 +896,11 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // USE: a move's output that another move takes as input earns; one nobody takes costs. At the owner's w_check, on the
 // cell of the selection judged:
 //   - used: within the owner's promise_window (the root's next N selections, of any arm, as a promise's window counts
-//     them), an unfailed selection of a DIFFERENT move consumed (consumedOf, the rows reached() walks) a row one of that
+//     them), a selection of a DIFFERENT move consumed (consumedOf, the rows reached() walks) a row one of that
 //     move's selections produced → r 1, once per request and move, on the cell of the first of its selections so used.
+//     A call selection cites none of the rows it worked on: it took p's output when it is a call of one of the calls
+//     offered on p's output, at or after that offer, within the window. A take counts whether the taker then failed or
+//     not (a refused take counts as used): the taker's failure is charged through its own chain.
 //     A move's own later steps never count, so a move cannot earn by feeding itself, and a loop between two moves earns
 //     each one once: counted per take, two moves feeding each other would earn without end;
 //   - unused: N of the root's selections passed after one of its selections, nothing took it, and a consumer of it was
@@ -939,22 +942,39 @@ const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const m = made.get(s.id) ?? []
     return m.length > 0 && m.every((r) => !GRADE_SHAPES.has(String(r.shape)) && !isDeadline(r))
   }
-  const offered = (p: Row): boolean => {
+  // The selections within p's window that offered its output: their frontier a row p made, with calls that take it.
+  const offersOf = (p: Row): Row[] => {
     const i = pos.get(p.id)!
-    return byRoot.get(String(p.root))!.slice(i + 1, i + 1 + n).some((c) => {
+    return byRoot.get(String(p.root))!.slice(i + 1, i + 1 + n).filter((c) => {
       const f = c.frontier as Row | undefined
       return typeof f?.id === "string" && byId.get(f.id)?.selection_ref === p.id && Array.isArray(c.calls) && c.calls.length > 0
     })
   }
+  const offered = (p: Row): boolean => offersOf(p).length > 0
   const used = new Set<string>()
   for (const c of sels.values()) {
-    if (failed.has(c.id) || c.seq > asOf || typeof c.root !== "string") continue
+    if (c.seq > asOf || typeof c.root !== "string") continue
     for (const x of consumed(c)) {
       const p = sels.get(String(byId.get(x)?.selection_ref))
       if (p === undefined || p.root !== c.root || move(String(p.cell)) === move(String(c.cell))) continue
       const i = pos.get(p.id), j = pos.get(c.id)
       if (i === undefined || j === undefined || j <= i || j > i + n) continue
       used.add(p.id)
+    }
+  }
+  // A call selection cites none of the rows it worked on, so its take is read from the offer: a call of the root, of
+  // another move, at or after an offer of p's output and within p's window, whose call is one of the calls on that offer.
+  // Matched by the call's kind, not by row: rows between the offer and the call (an explanation, a newer output) move
+  // the root's frontier on, and the call says no row it took.
+  for (const p of ordered) {
+    if (typeof p.root !== "string") continue
+    const i = pos.get(p.id)!, line = byRoot.get(p.root)!
+    for (const o of offersOf(p)) {
+      const calls = (o.calls as unknown[]).map(String)
+      if (line.slice(pos.get(o.id)!, i + 1 + n).some((c) => {
+        const a = String(c.a ?? "")
+        return c.seq <= asOf && a.startsWith("call/") && calls.includes(a.slice(5)) && move(String(c.cell)) !== move(String(p.cell))
+      })) used.add(p.id)
     }
   }
   const out = new Map<string, Grade>()
