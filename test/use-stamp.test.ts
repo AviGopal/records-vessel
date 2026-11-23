@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Whether what a selection made was used is records' to say: a plain read of a selection carries use {r, key}, the
-// fold's own use grade of that selection (fold.ts useGrades), and nothing when the fold has not judged it, whatever its
-// writer put there. A detector that classes unused output reads this stamp, never a copy of the rule. Over records' own
-// store module, in this process, on a store of its own.
+// fold's own use grade of that selection (fold.ts useGrades: each unused one keyed by the selection itself, a used one
+// once per request and move), and nothing when the fold has not judged it, whatever its writer put there. A detector that
+// classes unused output reads this stamp, never a copy of the rule. Over records' own store module, in this process, on
+// a store of its own.
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -42,6 +43,30 @@ const D = ask("use stamp D")
 const editD = sel(D, EDIT, EDIT_CELL)
 const result = put({ shape: "fileEditResult", selection_ref: editD.id }, "walk-test", "walk")
 sel(D, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: result.id })
+// Root E: two edits nobody took, then an edit of the same move whose answer the commit took: each is its own judgment.
+const E = ask("use stamp E")
+const idleE = sel(E, EDIT, EDIT_CELL)
+const idleE2 = sel(E, EDIT, EDIT_CELL)
+const usedE = sel(E, EDIT, EDIT_CELL)
+const resultE = put({ shape: "fileEditResult", selection_ref: usedE.id }, "walk-test", "walk")
+sel(E, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: resultE.id })
+filler(E); filler(E); filler(E)
+// Root M: six edits of one move nobody took, then the window passes on each.
+const M = ask("use stamp M")
+const idleM = [0, 1, 2, 3, 4, 5].map(() => sel(M, EDIT, EDIT_CELL))
+filler(M); filler(M); filler(M)
+// Root X: an edit nobody took, the window passed; root Z: an edit whose window has not passed; then, newer, root Y: an
+// edit of the same move whose answer the commit took.
+const X = ask("use stamp X"), Z = ask("use stamp Z"), Y = ask("use stamp Y")
+const idleX = sel(X, EDIT, EDIT_CELL); filler(X); filler(X); filler(X)
+const openZ = sel(Z, EDIT, EDIT_CELL)
+const usedY = sel(Y, EDIT, EDIT_CELL)
+sel(Y, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: put({ shape: "fileEditResult", selection_ref: usedY.id }, "walk-test", "walk").id })
+// Root W: the edit's answer taken by the commit, then, newer, the commit's answer taken by the push: two moves used.
+const Wr = ask("use stamp W")
+const editW = sel(Wr, EDIT, EDIT_CELL)
+const commitW = sel(Wr, "call/git_commit", "call/git_commit|fileEditResult,asker:person,age:0", { from: put({ shape: "fileEditResult", selection_ref: editW.id }, "walk-test", "walk").id })
+sel(Wr, "call/git_push", "call/git_push|gitCommit,asker:person,age:0", { from: put({ shape: "gitCommit", selection_ref: commitW.id }, "walk-test", "walk").id })
 // A selection whose writer put a use of its own, on a root no window has passed on.
 const C = ask("use stamp C")
 const forged = sel(C, EDIT, EDIT_CELL, { use: { r: 0, key: "forged" } })
@@ -49,11 +74,27 @@ const forged = sel(C, EDIT, EDIT_CELL, { use: { r: 0, key: "forged" } })
 const other = put({ shape: "world_changed", what: "use stamp other", use: "the writer's own" }, "kid-person", "person")
 
 describe("a selection read says whether what it made was used", () => {
-  test("[MUST-FAIL] an edit nobody took within the window reads use r 0, keyed by its root and move", () => {
-    expect(useOf([editA.id])).toEqual([{ r: 0, key: `use|${A.id}|${EDIT}` }])
+  test("[MUST-FAIL] an edit nobody took within the window reads use r 0, keyed by the selection itself", () => {
+    expect(useOf([editA.id])).toEqual([{ r: 0, key: `unused|${editA.id}` }])
   })
   test("[MUST-FAIL] an edit whose answer the commit took within the window reads use r 1", () => {
     expect(useOf([editD.id])).toEqual([{ r: 1, key: `use|${D.id}|${EDIT}` }])
+  })
+  test("[MUST-FAIL] a later use of the same move on the same request erases no earlier unused stamp: each reads its own", () => {
+    expect(useOf([idleE.id, idleE2.id, usedE.id])).toEqual([
+      { r: 0, key: `unused|${idleE.id}` }, { r: 0, key: `unused|${idleE2.id}` }, { r: 1, key: `use|${E.id}|${EDIT}` }])
+  })
+  test("[MUST-FAIL] many unused selections of one request and move are each stamped r 0, by their own id", () => {
+    expect(useOf(idleM.map((s) => s.id))).toEqual(idleM.map((s) => ({ r: 0, key: `unused|${s.id}` })))
+  })
+  test("[MUST-FAIL] another request's newer use of the same move neither stamps this request's selections nor erases a stamp", () => {
+    expect(useOf([idleX.id, openZ.id, usedY.id])).toEqual([{ r: 0, key: `unused|${idleX.id}` }, undefined, { r: 1, key: `use|${Y.id}|${EDIT}` }])
+  })
+  test("[GUARD] two requests' uses of one move are stamped each on its own request", () => {
+    expect(useOf([editD.id, usedY.id])).toEqual([{ r: 1, key: `use|${D.id}|${EDIT}` }, { r: 1, key: `use|${Y.id}|${EDIT}` }])
+  })
+  test("[GUARD] two moves used on one request are stamped each by its own move, the newer one included", () => {
+    expect(useOf([editW.id, commitW.id])).toEqual([{ r: 1, key: `use|${Wr.id}|${EDIT}` }, { r: 1, key: `use|${Wr.id}|call/git_commit` }])
   })
   test("[GUARD] another move's selection on the judged root reads no use: the stamp is the judged move's own", () => {
     expect(useOf([fillA.id])).toEqual([undefined])
@@ -65,13 +106,13 @@ describe("a selection read says whether what it made was used", () => {
     expect(useOf([forged.id])).toEqual([undefined])
   })
   test("[MUST-FAIL] read beside a stamped selection, a row of another shape keeps a use its writer put there: only a selection is stamped", () => {
-    expect(useOf([editA.id, other.id])).toEqual([{ r: 0, key: `use|${A.id}|${EDIT}` }, "the writer's own"])
+    expect(useOf([editA.id, other.id])).toEqual([{ r: 0, key: `unused|${editA.id}` }, "the writer's own"])
   })
   test("[GUARD] a read of the rows as stored carries no stamp, and keeps what was written", () => {
     expect(useOf([editA.id, forged.id], true)).toEqual([undefined, { r: 0, key: "forged" }])
   })
   test("[MUST-FAIL] a window that passes after an earlier read is read: the stamp follows the store", () => {
     filler(B); filler(B); filler(B)
-    expect(useOf([editB.id])).toEqual([{ r: 0, key: `use|${B.id}|${EDIT}` }])
+    expect(useOf([editB.id])).toEqual([{ r: 0, key: `unused|${editB.id}` }])
   })
 })

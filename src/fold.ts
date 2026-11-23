@@ -893,15 +893,16 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   }
   return [...out.values()]
 }
-// USE: a move's output that another move takes as input earns; one nobody takes costs. Each request (root) judges each
-// move once, at the owner's w_check, on the cell of the selection judged:
+// USE: a move's output that another move takes as input earns; one nobody takes costs. At the owner's w_check, on the
+// cell of the selection judged:
 //   - used: within the owner's promise_window (the root's next N selections, of any arm, as a promise's window counts
 //     them), an unfailed selection of a DIFFERENT move consumed (consumedOf, the rows reached() walks) a row one of that
-//     move's selections produced → r 1, on the cell of the first of its selections so used. A move's own later steps
-//     never count, so a move cannot earn by feeding itself, and a loop between moves earns each one once;
-//   - unused: N of the root's selections passed after one of its selections and nothing qualified → r 0, once. A use
-//     found later on the same root replaces it, so a move that is used is never also charged for its idle repeats, and
-//     a busy move is not charged per selection for its traffic;
+//     move's selections produced → r 1, once per request and move, on the cell of the first of its selections so used.
+//     A move's own later steps never count, so a move cannot earn by feeding itself, and a loop between two moves earns
+//     each one once: counted per take, two moves feeding each other would earn without end;
+//   - unused: N of the root's selections passed after one of its selections and nothing took it → r 0, once per such
+//     selection: each output nobody took is its own failure, so four idle runs of one move cost four, and a use of the
+//     move elsewhere on the request does not undo it;
 //   - otherwise (no window passed yet) → no grade.
 // Judged: treated, unfailed selections with a root that produced something: calls and runs (their tool answers), and
 // produces none of whose rows is a grade (a grader is judged by the marks on what it graded) or a deadline (a deadline
@@ -950,13 +951,14 @@ const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     // (a take or a passed window is read as of asOf below, so a selection past it earns and costs nothing)
     if (!judged(p)) continue
     const cell = String(p.cell)
-    const key = `use|${String(p.root)}|${move(cell)}`
     if (used.has(p.id)) {
-      if (out.get(key)?.r !== 1) out.set(key, { id: `use:${p.id}`, ok: true, r: 1, judged: p.id, key, cells: new Set([cell]), weights: new Map([[cell, w]]), by: "use", deadline: false })
+      const key = `use|${String(p.root)}|${move(cell)}`
+      if (!out.has(key)) out.set(key, { id: `use:${p.id}`, ok: true, r: 1, judged: p.id, key, cells: new Set([cell]), weights: new Map([[cell, w]]), by: "use", deadline: false })
       continue
     }
     const last = byRoot.get(String(p.root))![pos.get(p.id)! + n]
-    if (last === undefined || last.seq > asOf || out.has(key)) continue
+    if (last === undefined || last.seq > asOf) continue
+    const key = `unused|${p.id}`
     out.set(key, { id: `unused:${p.id}`, ok: true, r: 0, judged: p.id, key, cells: new Set([cell]), weights: new Map([[cell, w]]), by: "use", deadline: false })
   }
   return [...out.values()]

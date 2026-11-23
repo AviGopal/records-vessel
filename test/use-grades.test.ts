@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// A move's output that another move takes as input earns; one nobody takes costs. Each request judges each move once,
-// at the owner's w_check: used within the owner's promise_window → r 1; unused after it → r 0; a later use replaces
-// the r 0. The rows here are the shapes the walk, described-shape and the owner write.
+// A move's output that another move takes as input earns; one nobody takes costs, at the owner's w_check: used within
+// the owner's promise_window → r 1, once per request and move; each selection whose output nobody took within it → its
+// own r 0, which a later use does not undo. The rows here are the shapes the walk, described-shape and the owner write.
 import { describe, expect, test } from "bun:test"
 import * as F from "../src/fold"
 import type { Row } from "../src/store"
@@ -78,18 +78,20 @@ describe("a move's output, judged by its use within the window", () => {
     expect(use(b.rows)).toEqual([[0, CALL_CELL]])
   })
 
-  test("[MUST-FAIL] a busy move is judged once per request: five idle runs cost one r 0, not five", () => {
+  test("[MUST-FAIL] each idle run is its own failure: five idle runs cost five r 0, not one", () => {
     const b = build()
     for (let i = 0; i < 5; i++) b.run()
     b.filler(); b.filler(); b.filler()
-    expect(use(b.rows)).toEqual([[0, RUN_CELL]])
-    expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1.5 })
+    expect(use(b.rows)).toEqual([0, 1, 2, 3, 4].map(() => [0, RUN_CELL]))
+    expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 + 5 * 0.5 })
   })
 
-  test("[MUST-FAIL] the move is judged, not the cell: idle runs at two ages cost one r 0, on the first one's cell", () => {
+  test("[MUST-FAIL] idle runs in two cells cost an r 0 each, each on its own cell", () => {
     const b = build()
     b.run(); b.run({ cell: "run/tmpl|request,asker:person,age:1" }); b.filler(); b.filler(); b.filler()
-    expect(use(b.rows)).toEqual([[0, RUN_CELL]])
+    expect(use(b.rows)).toEqual([[0, RUN_CELL], [0, "run/tmpl|request,asker:person,age:1"]])
+    // its own r 0, and the other cell's r 0 inherited at the move's asker level
+    expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 + 0.5 + 0.5 })
   })
 
   test("[MUST-FAIL] each request judges the move on its own: used on one, idle on another → r 1 and r 0", () => {
@@ -151,19 +153,18 @@ describe("a move's output, judged by its use within the window", () => {
     expect(post(b.rows, RUN_CELL)).toMatchObject({ alpha: 1, beta: 1 })
   })
 
-  test("[MUST-FAIL] a later use replaces the r 0: an idle run, then a run of the same move that is used → r 1 only", () => {
+  test("[MUST-FAIL] a later use does not undo an idle run's r 0: an idle run, then a run of the same move that is used → r 0 and r 1", () => {
     const b = build()
     b.run(); b.filler(); b.filler(); b.filler()
     const r = b.run(); b.plan([r.out])
-    expect(use(b.rows)).toContainEqual([1, RUN_CELL])
-    expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[1, RUN_CELL]])
+    expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[0, RUN_CELL], [1, RUN_CELL]])
   })
 
-  test("[MUST-FAIL] a used move stays used: an idle repeat of it after the use costs nothing", () => {
+  test("[MUST-FAIL] an idle repeat of a used move costs its own r 0", () => {
     const b = build()
     const r = b.run(); b.plan([r.out])
     b.run(); b.filler(); b.filler(); b.filler()
-    expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[1, RUN_CELL]])
+    expect(use(b.rows).filter(([, c]) => c === RUN_CELL)).toEqual([[1, RUN_CELL], [0, RUN_CELL]])
   })
 
   test("[MUST-FAIL] a take after the window does not count: the run is unused", () => {
