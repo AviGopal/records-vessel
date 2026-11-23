@@ -1058,8 +1058,9 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     }
   }
   // The owner's start for a move no level has a record for, found once per read: the latest default prior row. It is
-  // the one settings row, so it names no cell; a default row naming a cell is that cell's own prior, not everyone's.
-  const defaultPrior = priors.filter((r) => r.default === true && r.cell === undefined).at(-1)
+  // the one settings row, so it names no cell; a default row naming a cell is that cell's own prior, not everyone's. A
+  // null cell names none, as records' has-field reads take it.
+  const defaultPrior = priors.filter((r) => r.default === true && r.cell == null).at(-1)
   const anyCell = latest.some((k) => k.cells.size > 0)
   if (anyCell) for (const c of cells) part(c)
   return cells.map((c) => {

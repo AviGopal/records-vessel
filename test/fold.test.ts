@@ -453,6 +453,11 @@ describe("a cell with no evidence of its own backs off to a coarser one", () => 
     expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1, beta: 7, from: "none" })
   })
 
+  test("[MUST-FAIL] an owner default row whose cell is null names no cell: it is the default start", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 7 }), prior({ default: true, cell: null, alpha0: 3, beta0: 5 })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 3, beta: 5, from: "none" })
+  })
+
   test("a default prior row not written by the owner is not the start (a guard)", () => {
     const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 7 }), row("prior", "walk", { default: true, alpha0: 3, beta0: 5 })]
     expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1, beta: 7, from: "none" })
