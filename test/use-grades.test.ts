@@ -348,6 +348,16 @@ describe("an unused output is debited only when a consumer of it was offered (US
     b.offer(p.out); b.filler(); b.filler()
     expect(use(b.rows)).toEqual([[0, PLAN_CELL]])
   })
+  test("[GUARD] the only offer on the window's last selection (the n-th after the run) counts → r 0", () => {
+    const b = build()
+    const r = b.run(); b.filler(); b.filler(); b.offer(r.out)
+    expect(use(b.rows)).toEqual([[0, RUN_CELL]])
+  })
+  test("[GUARD] a frontier with calls written empty is no offer → no grade", () => {
+    const b = build()
+    const r = b.run(); b.filler({ frontier: { id: r.out.id, shape: r.out.shape }, calls: [] }); b.filler(); b.filler()
+    expect(use(b.rows)).toEqual([])
+  })
   test("[MUST-FAIL] an offer after the window does not count: the window passed with none → no grade", () => {
     const b = build()
     const r = b.run(); b.filler(); b.filler(); b.filler(); b.offer(r.out)
