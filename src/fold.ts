@@ -896,11 +896,13 @@ const landGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // USE: a move's output that another move takes as input earns; one nobody takes costs. At the owner's w_check, on the
 // cell of the selection judged:
 //   - used: within the owner's promise_window (the root's next N selections, of any arm, as a promise's window counts
-//     them), a selection of a DIFFERENT move consumed (consumedOf, the rows reached() walks) a row one of that
+//     them), an unfailed selection of a DIFFERENT move consumed (consumedOf, the rows reached() walks) a row one of that
 //     move's selections produced → r 1, once per request and move, on the cell of the first of its selections so used.
 //     A call selection cites none of the rows it worked on: it took p's output when it is a call of one of the calls
-//     offered on p's output, at or after that offer, within the window. A take counts whether the taker then failed or
-//     not (a refused take counts as used): the taker's failure is charged through its own chain.
+//     offered on p's output, at or after that offer, within the window. Such a take counts whether the taker then failed
+//     or not (a refused take counts as used), as the walk offered the output and the taker took it; its failure is
+//     charged through its own chain. A failed selection that only cites the output, unoffered, is no use: a failed
+//     use counts only on the offer path.
 //     A move's own later steps never count, so a move cannot earn by feeding itself, and a loop between two moves earns
 //     each one once: counted per take, two moves feeding each other would earn without end;
 //   - unused: N of the root's selections passed after one of its selections, nothing took it, and a consumer of it was
@@ -953,7 +955,7 @@ const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const offered = (p: Row): boolean => offersOf(p).length > 0
   const used = new Set<string>()
   for (const c of sels.values()) {
-    if (c.seq > asOf || typeof c.root !== "string") continue
+    if (failed.has(c.id) || c.seq > asOf || typeof c.root !== "string") continue
     for (const x of consumed(c)) {
       const p = sels.get(String(byId.get(x)?.selection_ref))
       if (p === undefined || p.root !== c.root || move(String(p.cell)) === move(String(c.cell))) continue

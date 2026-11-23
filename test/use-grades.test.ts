@@ -204,10 +204,10 @@ describe("a move's output, judged by its use within the window", () => {
     expect(use(b.rows)).toEqual([])
   })
 
-  test("[MUST-FAIL] a take by a failed selection is a use (a refused take counts as used): r 1, its failure charged through its own chain", () => {
+  test("[MUST-FAIL] a take by a failed selection that only cites the output is no use: the run is unused once the window passes", () => {
     const b = build()
     const r = b.run(); const c = b.plan([r.out], PLAN_CELL, offerOf(r.out)); b.fail(c.s); b.filler(); b.filler()
-    expect(use(b.rows).filter(([, x]) => x === RUN_CELL)).toEqual([[1, RUN_CELL]])
+    expect(use(b.rows).filter(([, x]) => x === RUN_CELL)).toEqual([[0, RUN_CELL]])
   })
 
   test("[GUARD] a failed run is judged by its failure, never by use", () => {
