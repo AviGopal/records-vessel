@@ -713,7 +713,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // A cell is the move and everything it saw ("<move>|<context>": the shapes, the asker, the age), so the same cell
 // rarely comes twice and most draws were made at the prior: nothing learned carried to the next request. A cell with no
 // counted evidence of its own backs off to a coarser one that has some: the same move for the same asker, then the same
-// move anywhere. The finest level with evidence answers, each grade counted once, and the answer says which (from).
+// move anywhere, then any move of its kind. The finest level with evidence answers, each grade counted once, and the answer says which (from).
 // An owner prior still belongs to the exact cell.
 // A PROMISE IS SETTLED BY WHAT THE WALK DID NEXT (enablement-credit design §12.1; the USER: "Credit kept, penalise
 // broken"). On a root whose latest change_wanted says wanted: true, an answer may promise its next act: next_act
@@ -1001,8 +1001,12 @@ export const landGrades = memo(landGradesOf)
 // The same, computed fresh: what a check compares the kept answers with.
 export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf, landGrades: landGradesOf, useGrades: useGradesOf }
 
-type Level = "cell" | "asker" | "move" | "none"
+type Level = "cell" | "asker" | "move" | "kind" | "none"
 const move = (c: string): string => c.split("|")[0]
+// A move's kind: its first segment, as the walk names its moves ("run/<template>", "produce/<shape>/...", "call/<shape>").
+// Found without split, so a read splits each cell no more often than before.
+const head = (x: string, sep: string): string => { const i = x.indexOf(sep); return i < 0 ? x : x.slice(0, i) }
+const kindOf = (c: string): string => head(head(c, "|"), "/")
 const asker = (c: string): string | undefined => c.split("|").slice(1).join("|").split(",").find((t) => t.startsWith("asker:"))
 // A cell's move and asker, as move() and asker() give them: what foldFrom splits each cell string into, once per read.
 export const cellParts = (c: string): { move: string; asker: string | undefined } => ({ move: move(c), asker: asker(c) })
@@ -1026,14 +1030,15 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   // once, at its place in latest, so every level below selects the grades a filter of latest selected, in the same
   // order, and each sum adds them in that order (a floating point sum depends on it). A queried cell is split only when
   // some grade has a cell, as the levels' comparisons split it only then.
-  const parts = new Map<string, { move: string; asker: string | undefined }>()
-  const part = (x: string): { move: string; asker: string | undefined } => {
+  const parts = new Map<string, { move: string; asker: string | undefined; kind: string }>()
+  const part = (x: string): { move: string; asker: string | undefined; kind: string } => {
     let p = parts.get(x)
-    if (p === undefined) { p = cellParts(x); parts.set(x, p) }
+    if (p === undefined) { p = { ...cellParts(x), kind: kindOf(x) }; parts.set(x, p) }
     return p
   }
   const byCell = new Map<string, Grade[]>()
   const byMove = new Map<string, Grade[]>()
+  const byKind = new Map<string, Grade[]>()
   const byAsker = new Map<string, Map<string, Grade[]>>()
   const list = <K>(m: Map<K, Grade[]>, key: K, k: Grade): void => {
     const l = m.get(key)
@@ -1046,10 +1051,19 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
       const p = part(x)
       list(byCell, x, k)
       list(byMove, p.move, k)
+      list(byKind, p.kind, k)
       if (p.asker === undefined) continue
       if (!byAsker.has(p.move)) byAsker.set(p.move, new Map())
       list(byAsker.get(p.move)!, p.asker, k)
     }
+  }
+  // The owner's start for a move no level has a record for, indexed once per read as the grades are: the latest prior
+  // row for each kind, and the latest default.
+  const kindPrior = new Map<string, Row>()
+  let defaultPrior: Row | undefined
+  for (const r of priors) {
+    if (typeof r.kind === "string") kindPrior.set(r.kind, r)
+    if (r.default === true) defaultPrior = r
   }
   const anyCell = latest.some((k) => k.cells.size > 0)
   if (anyCell) for (const c of cells) part(c)
@@ -1059,6 +1073,7 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
       ["cell", (x) => x === c],
       ["asker", (x) => parts.get(x)!.move === pc!.move && pc!.asker !== undefined && parts.get(x)!.asker === pc!.asker],
       ["move", (x) => parts.get(x)!.move === pc!.move],
+      ["kind", (x) => parts.get(x)!.kind === pc!.kind],
     ]
     const own = priors.filter((r) => String(r.cell) === c)
     const p0 = own.reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
@@ -1079,12 +1094,25 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     const at: Array<[Level, () => Grade[]]> = [
       ["asker", () => pc === undefined || pc.asker === undefined ? [] : others(byAsker.get(pc.move)?.get(pc.asker))],
       ["move", () => pc === undefined ? [] : others(byMove.get(pc.move))],
+      ["kind", () => pc === undefined || mine.length > 0 ? [] : others(byKind.get(pc.kind))],
     ]
     const [coarse, inherited] = at.map(([level, ks]): [Level, Grade[]] => [level, ks()]).find(([, ks]) => ks.length > 0) ?? ["none" as Level, []]
     const got = sum(inherited, coarse)
     const cap = t?.prior_count
     const scale = cap === undefined ? 1 : Math.min(1, cap / Math.max(got.wins + got.losses, 1e-9))
-    const base = own.length > 0 ? p0 : { alpha: p0.alpha + got.wins * scale, beta: p0.beta + got.losses * scale }
+    // A MOVE NEVER GRADED STARTS FROM ITS KIND'S RECORD, ELSE THE OWNER'S WORD (USER ruling 11-23, a never-run move starts
+    // from its kind's record, else the owner's p0). A cell with no grades of its own whose move has none at the asker or
+    // move level takes its kind's record (the last level above); with none, the owner's prior row for its kind (prior
+    // {kind, alpha0, beta0}), else the owner's default (prior {default: true, alpha0, beta0}), the latest of each. A 1/1
+    // drawn for every move never tried outdrew every move with a record (most of them mostly failure), so untried moves
+    // won nearly every draw. A cell with grades of its own is a move that has run: it inherits as before, and neither its
+    // kind's record nor the owner's start reaches it. With no owner row at all the start is 1/1, as before.
+    // A query cell that is not a string has no kind; only the default can start it.
+    const start = (): { alpha: number; beta: number } => {
+      const r = (typeof c === "string" ? kindPrior.get(kindOf(c)) : undefined) ?? defaultPrior
+      return r === undefined ? p0 : { alpha: Number(r.alpha0), beta: Number(r.beta0) }
+    }
+    const base = own.length > 0 ? p0 : coarse === "none" && mine.length === 0 ? start() : { alpha: p0.alpha + got.wins * scale, beta: p0.beta + got.losses * scale }
     const self = sum(mine, "cell")
     return { cell: c, alpha: base.alpha + self.wins, beta: base.beta + self.losses, from: mine.length > 0 ? "cell" : coarse }
   })

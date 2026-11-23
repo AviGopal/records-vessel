@@ -22,10 +22,12 @@ const ANS = "produce/answer/ch1|world_changed,did:none,asker:person,age:0"
 const T = { w_person: 1, w_lapse: 1, w_close: 1, gamma: 0.7, depth: 12 } as F.Travel
 const K2 = 0.7 * 0.7 // answer k 0, run k 1, mint k 2
 // the parent's (8c05b1c) answer for the mixed pool of debits below, as it printed it, but the run's alpha: B's answer
-// uses the run's output at the next selection, within the window, so the use grade credits the run once (r 1 at w_check)
+// uses the run's output at the next selection, within the window, so the use grade credits the run once (r 1 at w_check);
+// and the grader's cell, which has no grade of its own, draws from its kind's record (the produces' debits) since a move
+// never graded starts from its kind's (USER ruling 11-23): with that level left out, it is the parent's 1/1 from none
 const EXPECTED_MIXED = {
   lapse: [true, 0, 0.48999999999999994], grader: [true, 0, 0.48999999999999994], promise: [true, 0, 0.48999999999999994],
-  posts: [[ANS, 1, 3, "cell"], [RUN, 2, 2.4, "cell"], [MINT, 1, 1.98, "cell"], ["produce/outcome|answer", 1, 1, "none"]],
+  posts: [[ANS, 1, 3, "cell"], [RUN, 2, 2.4, "cell"], [MINT, 1, 1.98, "cell"], ["produce/outcome|answer", 1, 3, "kind"]],
 }
 
 // The plan's mint on root A (or on B: sameRoot), its run on B, and B's answer using the run's output.
@@ -92,7 +94,8 @@ describe("what crosses to another root's work: a debit always, credit only from 
     const [k] = F.promiseGrades(w.rows, 1e9, 1e9)
     expect(k).toMatchObject({ ok: true, r: 1, judged: w.ansSel.id })
     expect([k.weights.get(ANS), k.weights.get(RUN), k.weights.has(MINT)]).toEqual([1, 0.7, false])
-    expect([w.post(ANS), w.post(MINT)].map((p) => [p.alpha, p.beta])).toEqual([[2, 1], [1, 1]])
+    // A's mint has no grade of its own: it draws from its kind's record (B's answer's credit, a produce like it), not a credit
+    expect([w.post(ANS), w.post(MINT)].map((p) => [p.alpha, p.beta, p.from])).toEqual([[2, 1, "cell"], [2, 1, "kind"]])
   })
   test("a derived lapse on B's deadline debits B's makers and A's mint at gamma^k, as before (deadlines always count)", () => {
     const w = world({ due: true })

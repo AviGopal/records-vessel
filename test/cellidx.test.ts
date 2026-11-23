@@ -13,6 +13,9 @@
 // Its levels entry was written again by the same runner when an unused output came to be debited only where a consumer of
 // it was offered: levels' selections carry no frontier, so its unused grades fall away; the entry is the parent's answers
 // with those grades left out, bit for bit, and every other store's answers are unchanged.
+// It was written again by the same runner when the fold gained the kind level (a cell with no grades, whose move has none,
+// takes any move of its kind's record): levels, seps and order change only where such a cell's answer had come from none;
+// with the kind level left out, every store's answers are the earlier snapshot's, bit for bit.
 import { describe, expect, test } from "bun:test"
 import * as F from "../src/fold"
 import type { Row } from "../src/store"
@@ -80,8 +83,8 @@ describe("the posts are the parent's, bit for bit", () => {
   }
 
   // What the parent answered, read from the snapshot: so an equal answer is equal over the cases that matter.
-  test("the snapshot covers each level: posts from a cell's own grades, the asker's, the move's and none", () => {
-    for (const name of ["levels", "seps"]) for (const level of ["cell", "asker", "move", "none"]) expect([name, level, (SNAPSHOT[name]!.from[level] ?? 0) > 0]).toEqual([name, level, true])
+  test("the snapshot covers each level: posts from a cell's own grades, the asker's, the move's, the kind's and none", () => {
+    for (const name of ["levels", "seps"]) for (const level of ["cell", "asker", "move", "kind", "none"]) expect([name, level, (SNAPSHOT[name]!.from[level] ?? 0) > 0]).toEqual([name, level, true])
   })
 
   test("two reads of different rows, interleaved, each answer as the parent did (nothing is kept from one read for the next)", () => {

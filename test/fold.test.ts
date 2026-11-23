@@ -391,8 +391,8 @@ describe("a cell with no evidence of its own backs off to a coarser one", () => 
   test("[MUST-FAIL] the answer says which level it came from", () => {
     const rows = [...graded(cell("hop"), 1), ...graded(cell("x", "owner"), 0)]
     const from = (c: string) => F.foldFrom?.([ask, ...rows], [c], seq, seq)[0]?.from
-    expect([from(cell("hop")), from(cell("y")), from(cell("y", "detector")), from("produce/due/ch1|hop,asker:person,age:0")])
-      .toEqual(["cell", "asker", "move", "none"])
+    expect([from(cell("hop")), from(cell("y")), from(cell("y", "detector")), from("produce/due/ch1|hop,asker:person,age:0"), from("run/t1|hop,asker:person,age:0")])
+      .toEqual(["cell", "asker", "move", "kind", "none"])
   })
 
   test("[MUST-FAIL] a cell's own grades add on top of its move's record for the same asker, each counted once (the USER: inherit, then refine)", () => {
@@ -400,8 +400,74 @@ describe("a cell with no evidence of its own backs off to a coarser one", () => 
     expect(post(rows, cell("hop"))).toEqual({ cell: cell("hop"), alpha: 2, beta: 3 })
   })
 
-  test("another move's evidence is never shared (a guard)", () => {
-    expect(post(graded(cell("hop"), 1), "produce/due/ch1|hop,asker:person,age:0")).toEqual({ cell: "produce/due/ch1|hop,asker:person,age:0", alpha: 1, beta: 1 })
+  test("another kind's evidence is never shared (a guard)", () => {
+    expect(post(graded(cell("hop"), 1), "run/t1|hop,asker:person,age:0")).toEqual({ cell: "run/t1|hop,asker:person,age:0", alpha: 1, beta: 1 })
+  })
+
+  // USER ruling 11-23, a never-run move starts from its kind's record, else the owner's p0.
+  const RUN = "run/t9|hop,asker:person,age:0"
+  const prior = (fields: Record<string, unknown>) => row("prior", "owner", fields)
+  const full = (rows: Row[], c: string) => F.foldFrom([ask, ...rows], [c], seq, seq)[0]
+
+  test("[MUST-FAIL] a move never graded takes its kind's record, capped as the other levels are", () => {
+    const rows = [...graded(cell("hop"), 1), ...graded(cell("a"), 0), ...graded(cell("b"), 0), ...graded(cell("c"), 0)]
+    expect(full(rows, "produce/due/ch1|hop,asker:person,age:0")).toEqual({ cell: "produce/due/ch1|hop,asker:person,age:0", alpha: 2, beta: 4, from: "kind" })
+    expect(full([travel({ prior_count: 2 }), ...rows], "produce/due/ch1|hop,asker:person,age:0"))
+      .toEqual({ cell: "produce/due/ch1|hop,asker:person,age:0", alpha: 1.5, beta: 2.5, from: "kind" })
+  })
+
+  test("[MUST-FAIL] a grade that reached cells of two kinds counts at a kind at its weight on that kind's cell", () => {
+    const stepSel = row("selection", "walk", { arm: "treated", cell: "run/t2|hop,asker:person,age:0" })
+    const answerSel = row("selection", "walk", { arm: "treated", cell: cell("hop"), pool_refs: [ask.id, stepSel.id] })
+    const draft = row("hop", "walk", { selection_ref: stepSel.id, output: { text: "draft" } })
+    const used = row("answer", "described", { selection_ref: answerSel.id, input_refs: [ask.id, draft.id], uses: [draft.id] })
+    const rows = [travel(), stepSel, answerSel, draft, used, row("outcome", "person", { r: 1, input_refs: [used.id] })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1.7, beta: 1, from: "kind" })
+    expect(full(rows, "produce/due/ch1|hop,asker:person,age:0")).toEqual({ cell: "produce/due/ch1|hop,asker:person,age:0", alpha: 2, beta: 1, from: "kind" })
+  })
+
+  test("[MUST-FAIL] the kind is read from the move, never from the context: a bare move with a / in its context is its own kind", () => {
+    const rows = graded("run/t2|hop,asker:person,age:0", 1)
+    expect(full(rows, "run|shapes/a,asker:person,age:0")).toEqual({ cell: "run|shapes/a,asker:person,age:0", alpha: 2, beta: 1, from: "kind" })
+  })
+
+  test("[MUST-FAIL] its kind's record, not the owner's rows, when it has one", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ kind: "produce", alpha0: 1, beta0: 9 }), prior({ default: true, alpha0: 1, beta0: 7 })]
+    expect(full(rows, "produce/due/ch1|hop,asker:person,age:0")).toEqual({ cell: "produce/due/ch1|hop,asker:person,age:0", alpha: 2, beta: 1, from: "kind" })
+  })
+
+  test("[MUST-FAIL] with no record of its kind, the owner's prior for that kind, the latest one", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ kind: "run", alpha0: 1, beta0: 5 }), prior({ kind: "run", alpha0: 1, beta0: 9 }),
+      prior({ kind: "produce", alpha0: 1, beta0: 3 }), prior({ default: true, alpha0: 1, beta0: 7 })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1, beta: 9, from: "none" })
+  })
+
+  test("[MUST-FAIL] with no prior for its kind, the owner's default, the latest one; another kind's prior is not it", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ default: true, alpha0: 1, beta0: 5 }), prior({ default: true, alpha0: 1, beta0: 7 }),
+      prior({ kind: "produce", alpha0: 1, beta0: 3 })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 1, beta: 7, from: "none" })
+  })
+
+  test("a cell with grades of its own is a move that has run: neither its kind's record nor the owner's start reaches it (a guard)", () => {
+    const rows = [...graded(RUN, 1), ...graded("run/t3|hop,asker:person,age:0", 0), prior({ kind: "run", alpha0: 1, beta0: 9 }),
+      prior({ default: true, alpha0: 1, beta0: 7 })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 2, beta: 1, from: "cell" })
+  })
+
+  test("with no record of its kind and no owner prior, 1/1 (a guard)", () => {
+    expect(full(graded(cell("hop"), 1), RUN)).toEqual({ cell: RUN, alpha: 1, beta: 1, from: "none" })
+  })
+
+  test("a move with a record of its own takes it as before, whatever its kind's record and the owner's priors say (a guard)", () => {
+    const rows = [...graded(cell("hop"), 1), ...graded("produce/due/ch1|x,asker:person,age:0", 0), ...graded("produce/due/ch1|y,asker:person,age:0", 0),
+      prior({ kind: "produce", alpha0: 1, beta0: 9 }), prior({ default: true, alpha0: 1, beta0: 7 })]
+    expect(full(rows, cell("other"))).toEqual({ cell: cell("other"), alpha: 2, beta: 1, from: "asker" })
+    expect(full(rows, cell("other", "owner"))).toEqual({ cell: cell("other", "owner"), alpha: 2, beta: 1, from: "move" })
+  })
+
+  test("an owner prior on the exact cell is kept as the prior, as before (a guard)", () => {
+    const rows = [...graded(cell("hop"), 1), prior({ cell: RUN, alpha0: 3, beta0: 2 }), prior({ kind: "run", alpha0: 1, beta0: 9 })]
+    expect(full(rows, RUN)).toEqual({ cell: RUN, alpha: 3, beta: 2, from: "none" })
   })
 })
 

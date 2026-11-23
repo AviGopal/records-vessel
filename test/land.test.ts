@@ -2,7 +2,7 @@
 // A person's verdict on a landing teaches the steps behind the change (the USER: "Yes, credit the chain"): it grades the
 // selection that made the diff and travels back along consumption at w_person·γ^k. A model's verdict originates nothing.
 import { describe, expect, test } from "bun:test"
-import { fold, landGrades } from "../src/fold"
+import { fold, foldFrom, landGrades } from "../src/fold"
 import type { Row } from "../src/store"
 
 let seq = 0
@@ -105,9 +105,10 @@ describe("a person's verdict on a landing", () => {
     diffReq.uses = [...[diffReq.uses].flat(), graded.id]
     c.verdict("person", 1)
     const cells = [...CELLS, "produce/outcome|answer"]
-    const posts = fold(c.rows, cells, 1e9, 1e9)
-    // the makers move as before; the grader's cell does not
-    expect(posts.map((p) => [p.alpha, p.beta])).toEqual([[1 + 0.25, 1], [1 + 0.5, 1], [1 + 1, 1], [1, 1]])
+    const posts = foldFrom(c.rows, cells, 1e9, 1e9)
+    // the makers move as before; the grader's cell gains nothing of its own: having no grade, it draws from its kind's
+    // record (the request's credit, a produce like it), not from a credit
+    expect(posts.map((p) => [p.alpha, p.beta, p.from])).toEqual([[1 + 0.25, 1, "cell"], [1 + 0.5, 1, "cell"], [1 + 1, 1, "cell"], [1 + 0.5, 1, "kind"]])
   })
 
   test("[MUST-FAIL] latest decides per tree, whoever: A r 0 then B r 1 is one credit and no debit; r 1 then r 0 is one debit", () => {
