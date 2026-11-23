@@ -177,7 +177,14 @@ const consumedOf = (index: Index): ((sel: Row) => string[]) => {
   }
   return (sel: Row): string[] => {
     const a = String(sel.a ?? "")
-    if (a.startsWith("call/")) return sel.from === undefined ? [] : [String(sel.from)]
+    // A call a request asked for consumed the request. A call offered with no request (the step a gated call's chain
+    // names, bound from the root's newest made row) consumed that row, which the selection names as its frontier: read
+    // as consuming nothing, the row it took would look offered and unused, and credit would stop at the call.
+    if (a.startsWith("call/")) {
+      if (sel.from !== undefined) return [String(sel.from)]
+      const took = (sel.frontier as { id?: unknown } | undefined)?.id
+      return took === undefined ? [] : [String(took)]
+    }
     if (a.startsWith("run/")) return [a.slice("run/".length)]
     return (made.get(sel.id) ?? []).flatMap((p) => {
       const shown = new Set([p.input_refs].flat().map(String))
