@@ -1167,6 +1167,16 @@ describe("the walk's arm beside open roots", () => {
     expect((await r.episodes()).roots.map((x) => x.root.id)).toEqual([a.id])
   })
 
+  test("[GUARD] an arm value other than beside is not asked for: the open roots alone", async () => {
+    const r = await fresh()
+    await r.arm()
+    const a = await r.ask("hello")
+    for (const arm of ["other", "", "besides"]) {
+      const all = (await r.call(NODE_KEY, { type: "record_read", episode: WALK, roots: "all", arm })) as { roots: Array<{ root: { id: string } }> }
+      expect(all.roots.map((x) => x.root.id)).toEqual([a.id])
+    }
+  })
+
   test("[GUARD] the single episode read is unchanged: the oldest open request's rows, never the arm", async () => {
     const r = await fresh()
     const arm = await r.arm()
