@@ -585,6 +585,47 @@ describe("a detector closing a gap", () => {
     expect(post(rows, "ask")).toEqual({ cell: "ask", alpha: 1, beta: 1 })
   })
 
+  // the closer's verdict on the gap, as it writes it: the gap's row again, open, its run's counts in its metadata
+  const verdict = (count: string) => () => at("gap", "detector", { gap_id: "g1", status: "open", meta: { closer_evidence: { rc: "1", count } } })
+  const scanned = (rows: Row[]) => F.gapClosuresScan(rows, rows.length, rows.length).map((g) => [[...g.cells].sort(), g.refused ?? null])
+  const lazy = (rows: Row[]) => F.gapClosures(rows, rows.length, rows.length).map((g) => [[...g.cells].sort(), g.refused ?? null])
+
+  test("[MUST-FAIL] a landing the closer then read red credits nothing when the gap closes: refused as no_change", () => {
+    const rows = build([rule, gapRow("open"), sel("ask"), sel("land"), call("land_it"), verdict("21 pass, 4 fail"), gapRow("closed")])
+    expect(post(rows, "ask")).toEqual({ cell: "ask", alpha: 1, beta: 1 })
+    expect(post(rows, "land")).toEqual({ cell: "land", alpha: 1, beta: 1 })
+    expect(scanned(rows)).toEqual([[[], "no_change"]])
+    expect(lazy(rows)).toEqual(scanned(rows))
+  })
+
+  test("[MUST-FAIL] after the closer's red, only the work since it is credited, not the steps before it", () => {
+    const rows = build([rule, gapRow("open"), sel("before"), call("land_it"), verdict("0 pass, 2 fail"), sel("after"), call("land_it"), gapRow("closed")])
+    expect(post(rows, "before")).toEqual({ cell: "before", alpha: 1, beta: 1 })
+    expect(post(rows, "after")).toEqual({ cell: "after", alpha: 2, beta: 1 })
+    expect(scanned(rows)).toEqual([[["after"], null]])
+    expect(lazy(rows)).toEqual(scanned(rows))
+  })
+
+  test("a closer red, then a landing, then a closing credits that landing's chain (a guard)", () => {
+    const rows = build([rule, gapRow("open"), verdict("3 fail"), sel("land"), call("land_it"), gapRow("closed")])
+    expect(post(rows, "land")).toEqual({ cell: "land", alpha: 2, beta: 1 })
+    expect(lazy(rows)).toEqual(scanned(rows))
+  })
+
+  test("with no red verdict, a closing credits as before: a green or count-less closer row starts nothing (a guard)", () => {
+    const rows = build([rule, gapRow("open"), sel("ask"), call("land_it"), verdict("12 pass, 0 fail"), verdict(""), gapRow("closed")])
+    expect(post(rows, "ask")).toEqual({ cell: "ask", alpha: 2, beta: 1 })
+    expect(lazy(rows)).toEqual(scanned(rows))
+  })
+
+  test("a closer's counts are red only when a test failed, and only as its metadata says them", () => {
+    const red = (count: unknown) => F.closerRed({ shape: "gap", role: "detector", meta: { closer_evidence: { count } } } as unknown as Row)
+    expect(["2 fail", "0 pass, 2 fail", "21 pass, 4 fail, 1 errors", "10 fail"].map(red)).toEqual([true, true, true, true])
+    expect(["12 pass, 0 fail", "12 pass", "", "1 skip", "10 failed"].map(red)).toEqual([false, false, false, false, false])
+    expect([undefined, 3, null].map(red)).toEqual([false, false, false])
+    expect(F.closerRed({ shape: "gap", role: "detector", closer_evidence: { count: "2 fail" } } as unknown as Row)).toBe(false)
+  })
+
   test("a detector's closing is never a grade of an answer: it closes no request (a guard)", () => {
     const rows = build([rule, gapRow("open"), sel("ask"), call("land_it"), gapRow("closed")])
     expect(F.standing(rows, rows.length, rows.length)).toEqual([])

@@ -624,13 +624,22 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
 // when the walk changed something there first (law 12: a gap an operator fixed, or a check that turned green on its own,
 // is not the walk's): a call of the shape the owner's credits row names (by_call) ended, joined to its started hop by
 // call_id, in a treated selection of that episode with no failure, before the closing row. Otherwise it is refused as
-// no_change. An episode runs from the gap's previous closing (or its first row) to this one, so a gap that reopens and
-// closes again credits only the work since it reopened. Kept apart from grades(): what closes a request and what lapses
+// no_change. An episode runs from the gap's previous closing (or its first row), or from the closer's last red verdict
+// on it (closerRed) when that is later, to this one, so a gap that reopens and closes again credits only the work since
+// it reopened, and a landing the closer read red afterwards credits nothing. Kept apart from grades(): what closes a request and what lapses
 // never read it. With no credits row, nothing is credited.
 // Residual (debt): an operator fix that lands beside a walk landing on the same gap still credits the walk; a closing
 // row citing what its check judged would tie it causally.
 // The closure grades as first written: every closure scans every treated selection. Kept as the oracle the lazy form
 // below is tested against (byte-equal grades); nothing else calls it.
+// A closer's red verdict on the gap (its evidence's counts show a test of the gap's file failing) starts the gap's episode
+// again: a change landed before it was read red by the check that closes the gap, so it did not fix it, and a closing
+// after it credits only a change landed since. Without this, a closing the judge's own change caused (a check run another
+// way reading green) would credit an earlier landing that the check had already read red.
+export const closerRed = (r: Row): boolean => {
+  const count = ((r.meta ?? {}) as { closer_evidence?: { count?: unknown } }).closer_evidence?.count
+  return typeof count === "string" && /(^|, )0*[1-9][0-9]* fail(,|$)/.test(count)
+}
 export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
@@ -653,7 +662,7 @@ export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[
     let since = 0
     let open: string[] = []
     for (const c of rows) {
-      if (c.status === "open") { open.push(c.id); continue }
+      if (c.status === "open") { open.push(c.id); if (closerRed(c)) since = c.seq; continue }
       if (open.length > 0 && c.seq <= asOf) {
         const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
         const chain = sels.filter((s) => s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id))
@@ -705,7 +714,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     let since = 0
     let open: string[] = []
     for (const c of rows) {
-      if (c.status === "open") { open.push(c.id); continue }
+      if (c.status === "open") { open.push(c.id); if (closerRed(c)) since = c.seq; continue }
       if (open.length > 0 && c.seq <= asOf) {
         const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
         const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
