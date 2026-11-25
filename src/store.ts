@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR } from "./config"
+import { rowsIn } from "./rows-file"
 import { deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
 import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
 import {
@@ -49,10 +50,8 @@ if (!existsSync(dirname(DATA_DIR))) {
 }
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { mode: 0o700 })
 appendFileSync(FILE, "")
-export const rows: Row[] = (await Bun.file(FILE).text())
-  .split("\n")
-  .filter((l) => l.length > 0)
-  .map((l) => JSON.parse(l) as Row)
+// read by lines (rows-file.ts): the file is past what one string can hold
+export const rows: Row[] = await rowsIn<Row>(Bun.file(FILE).stream())
 let seq = rows.length
 let wakers: Array<() => void> = []
 
