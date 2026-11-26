@@ -301,6 +301,19 @@ describe("what closes a gap: only its composition's expectation moving (construc
       sel(40, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), sel(50, a, cell, { alpha: 2.5, beta: 3, from: "cell" })]
     expect(run(rows).map((g) => [g.status, (g.meta as { trigger: string; opened_by?: string }).opened_by])).toEqual([["open", undefined], ["closed", "repeat"]])
   })
+  test("[GUARD] a closed gap opens again at the next unmoved repeat", () => {
+    const rows = [sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" }),
+      sel(30, a, cell, { alpha: 2.5, beta: 3, from: "cell" }), sel(40, a, cell, { alpha: 2.5, beta: 3, from: "cell" })]
+    expect(run(rows).map((g) => g.status)).toEqual(["open", "closed", "open"])
+  })
+  test("[GUARD] an offer moved on one root does not close a gap the same selection shows unmoved on another", () => {
+    const both: Row = { ...sel(30, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r1"),
+      cands: [{ id: a, kind: "produce", root: "r1", ctx: "outcome,asker:detector,age:5" }, { id: a, kind: "produce", root: "r2", ctx: "outcome,asker:detector,age:5" }],
+      posts: [{ alpha: 2.5, beta: 2, from: "cell" }, { alpha: 2.5, beta: 3, from: "cell" }] }
+    const rows = [sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r1"), sel(15, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r2"),
+      sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r1"), both]
+    expect(run(rows).map((g) => g.status)).toEqual(["open"])
+  })
   test("[MUST-FAIL] a failure-opened gap closed by a moved repeat names the failure as what opened it", () => {
     const edit = "call/fs_edit"
     const r = sel(10, "produce/request/q", "produce/request/q|gap,asker:detector,age:1", { alpha: 2, beta: 2, from: "cell" })
