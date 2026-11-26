@@ -5,7 +5,7 @@
 // and a field the case does not turn on is filled where noted.
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { checker, compositionOf, gapIdOf, parityOf, selfCheck, unmoved } from "../src/self-check"
@@ -396,6 +396,57 @@ describe("records writes the gap, as its own detector, once per change", () => {
       expect(restarted(data, [2])).toEqual([[id, "open"]])
       expect(restarted(data, [2])).toEqual([[id, "open"]])
       expect(restarted(data, [3])).toEqual([[id, "open"], [id, "closed"]])
+    } finally {
+      rmSync(data, { recursive: true, force: true })
+    }
+  })
+
+  // A start that loads the store, writes what it is given, and says each gap row (gap_id, status, writer, walkable) and the
+  // walk's roots by gap_id.
+  const booted = (data: string, writes: Array<[Record<string, unknown>, string, string]>): { gaps: unknown[][]; roots: unknown[] } => {
+    const script = join(data, "boot.ts")
+    writeFileSync(script, `
+      const store = await import(${JSON.stringify(join(import.meta.dir, "../src/store"))})
+      for (const [body, writer, role] of ${JSON.stringify(writes)}) store.write({ ...body, ...(body.shape === "selection" ? { posts_seq: store.lastSeq() } : {}) }, writer, role)
+      console.log(JSON.stringify({ gaps: store.read({ shape: "gap" }).map((g) => [g.gap_id, g.status, g.writer, g.walkable ?? null]),
+        roots: store.episodes("walk-test").roots.map((x) => x.root.gap_id ?? x.root.shape) }))
+    `)
+    const r = Bun.spawnSync([process.execPath, script], { env: { ...process.env, RECORDS_DATA_DIR: join(data, "store") } })
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString())
+    return JSON.parse(r.stdout.toString().trim().split("\n").at(-1) ?? "{}")
+  }
+  const tmpl = "produce/activity_template/tmpl03"
+  const offer = (beta: number): [Record<string, unknown>, string, string] => [{ shape: "selection", arm: "treated", root: "r7", a: tmpl, cell: `${tmpl}|outcome,asker:detector,age:5`,
+    cands: [{ id: tmpl, kind: "produce", root: "r7", ctx: "outcome,asker:detector,age:5" }], posts: [{ alpha: 2.5, beta, from: "cell" }] }, "walk-test", "walk"]
+  const work: [Record<string, unknown>, string, string] = [{ shape: "gap", gap_id: "failing-test-x", status: "open", category: "failing_test" }, "pull-sync", "detector"]
+
+  test("[MUST-FAIL] a gap the self-check opens says walkable false: shown by a gap read, not a root beside a gap that is", () => {
+    const data = mkdtempSync(join(tmpdir(), "records-self-check-shown-"))
+    try {
+      const id = gapIdOf(compositionOf(`${tmpl}|outcome,asker:detector,age:5`))
+      const got = booted(data, [work, offer(2), offer(2)])
+      expect(got.gaps).toEqual([["failing-test-x", "open", "pull-sync", null], [id, "open", process.env.RECORDS_VESSEL_ID, false]])
+      expect(got.roots).toEqual(["failing-test-x"])
+    } finally {
+      rmSync(data, { recursive: true, force: true })
+    }
+  })
+
+  test("[MUST-FAIL] a gap it held open before its gaps said walkable false is marked once as it loads, across restarts; a closed one, and another writer's, never", () => {
+    const data = mkdtempSync(join(tmpdir(), "records-self-check-mark-"))
+    try {
+      const me = String(process.env.RECORDS_VESSEL_ID)
+      const old = (seq: number, gap_id: string, status: string, writer = me) => ({ shape: "gap", gap_id, status, category: "self_check", summary: "s",
+        meta: { composition: gap_id, trigger: "repeat" }, input_refs: [], seq, t: "2026-01-01T00:00:00.000Z", writer, role: "detector", id: `old${seq}` })
+      mkdirSync(join(data, "store"))
+      writeFileSync(join(data, "store", "rows"), [old(1, "self-check:held", "open"), old(2, "self-check:shut", "open"), old(3, "self-check:shut", "closed"),
+        old(4, "self-check:theirs", "open", "someone-else")].map((r) => JSON.stringify(r)).join("\n") + "\n")
+      const want = [["self-check:held", "open", me, null], ["self-check:shut", "open", me, null], ["self-check:shut", "closed", me, null],
+        ["self-check:theirs", "open", "someone-else", null], ["self-check:held", "open", me, false]]
+      const first = booted(data, [])
+      expect(first.gaps).toEqual(want)
+      expect(first.roots).toEqual(["self-check:theirs"])
+      expect(booted(data, []).gaps).toEqual(want)
     } finally {
       rmSync(data, { recursive: true, force: true })
     }

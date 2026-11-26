@@ -68,8 +68,9 @@ export const checker = (self?: string) => {
   const owed = new Map<string, Owed[]>()
   const lastChoice = new Map<string, Offer>()
   const acts = new Map<string, Array<{ sel: string; seq: number; k: string }>>()
-  // an open gap, by the trigger that opened it
+  // an open gap, by the trigger that opened it, and the detector's own latest row of it
   const open = new Map<string, string>()
+  const openRow = new Map<string, Row>()
 
   const failedNow = (f: Row): boolean => moveFailedIn(windows)(f) && index.sels.get(String(f.selection_ref))?.writer === f.writer
   const refail = (): void => { index.failed = new Set(walkFailures.filter(failedNow).map((f) => String(f.selection_ref))) }
@@ -176,23 +177,33 @@ export const checker = (self?: string) => {
     if (r.shape === GAP && r.role === DETECTOR && (self === undefined || r.writer === self) && String(r.gap_id ?? "").startsWith(SELF_CHECK)) {
       const k = (r.meta as { composition?: unknown } | undefined)?.composition
       if (typeof k === "string") {
-        if (r.status === "open") open.set(k, String((r.meta as { trigger?: unknown }).trigger ?? ""))
-        else open.delete(k)
+        if (r.status === "open") { open.set(k, String((r.meta as { trigger?: unknown }).trigger ?? "")); openRow.set(k, r) }
+        else { open.delete(k); openRow.delete(k) }
       }
     }
     if (r.shape === SELECTION && r.role === WALK && String(r.arm) === TREATED) return judge(r)
     return []
   }
 
-  return { see, gapsOf, index }
+  // A gap it holds open whose latest row does not say walkable false (written before its gaps said so): that row again,
+  // saying it, once. The store writes these when it loads, so no gap it holds open is worked.
+  const unmarked = (): Array<Record<string, unknown>> => [...openRow.values()].filter((r) => r.walkable !== false).map((r) => {
+    const { seq: _s, t: _t, id: _i, writer: _w, role: _r, user_id: _u, ...rest } = r
+    return { ...rest, walkable: false }
+  })
+
+  return { see, gapsOf, unmarked, index }
 }
 
 export const gapIdOf = (composition: string): string => `${SELF_CHECK}${createHash("sha256").update(composition).digest("hex").slice(0, 16)}`
 
+// An open self-check gap is shown, not worked (walkable false, which records' open-gap read honours): it is evidence that
+// a composition's expectation did not move, for the fold and for whoever reads gaps, and walking it produced no work.
 const gapRow = (k: string, status: "open" | "closed", f: Finding, openedBy?: string): Record<string, unknown> => ({
   shape: GAP,
   gap_id: gapIdOf(k),
   status,
+  ...(status === "open" ? { walkable: false } : {}),
   category: "self_check",
   summary: status === "open"
     ? `${k}: ${f.trigger === "failure" ? "a failure" : "a repeat with no act since its last choice"} was not reflected in its expectation at its next offer`

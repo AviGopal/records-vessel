@@ -947,3 +947,7 @@ const withUse = (out: Row[]): Row[] => {
     return (u === undefined ? rest : { ...rest, use: u }) as Row
   })
 }
+
+// The self-check's open gaps from before they said walkable false are marked once as it loads (self-check.ts unmarked):
+// last in the module, after everything a write reads is defined.
+for (const g of selfChecks.unmarked()) write(g, VESSEL_ID, DETECTOR)
