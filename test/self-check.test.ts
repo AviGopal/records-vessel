@@ -342,6 +342,15 @@ describe("what closes a gap: only its composition's expectation moving (construc
     expect(restarted(rows.at(-1) as Row)).toEqual([])
     expect(restarted(lagged({ alpha: 2, beta: 4, from: "cell" }).at(-1) as Row).map((g) => g.status)).toEqual(["closed"])
   })
+  test("[GUARD] after a restart the opening post keeps its level: a same-level debit closes though the mean rose", () => {
+    const rows = lagged({ alpha: 2, beta: 3, from: "cell" })
+    const opened = run(rows.slice(0, -1))
+    const stored = { ...opened[0], id: id("gap-stored-level"), seq: 15, t: T, writer: "records-self", role: "detector", input_refs: [] } as Row
+    const chk = checker("records-self")
+    for (const r of [...rows.slice(0, -1), stored]) chk.see(r)
+    // beta 3 → 4 at the same level is a debit; the mean 2/5 → 8/12 rose, which only a compare across levels would read
+    expect(chk.gapsOf(chk.see(lagged({ alpha: 8, beta: 4, from: "cell" }).at(-1) as Row)).map((g) => g.status)).toEqual(["closed"])
+  })
   test("[MUST-FAIL] a failure-opened gap closed by a moved repeat names the failure as what opened it", () => {
     const edit = "call/fs_edit"
     const r = sel(10, "produce/request/q", "produce/request/q|gap,asker:detector,age:1", { alpha: 2, beta: 2, from: "cell" })
