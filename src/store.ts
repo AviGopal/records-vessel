@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { DATA_DIR } from "./config"
+import { DATA_DIR, VESSEL_ID } from "./config"
+import { checker } from "./self-check"
 import { rowsIn } from "./rows-file"
 import { deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
 import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
@@ -53,6 +54,9 @@ appendFileSync(FILE, "")
 // read by lines (rows-file.ts): the file is past what one string can hold
 export const rows: Row[] = await rowsIn<Row>(Bun.file(FILE).stream())
 let seq = rows.length
+// The self-check's state, read once from the rows as loaded: what it finds there was written when those rows were.
+const selfChecks = checker()
+for (const r of rows) selfChecks.see(r)
 let wakers: Array<() => void> = []
 
 // A VIEW NEVER BECOMES DATA: a row carrying the mark records puts on a fact it showed in place of a hold (read_as_fact,
@@ -106,11 +110,14 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   const row: Row = { ...unsigned, shape: String(body.shape), id }
   appendFileSync(FILE, `${JSON.stringify(row)}\n`)
   rows.push(row)
+  const found = selfChecks.see(row)
   const woken = wakers
   wakers = []
   for (const f of woken) {
     f()
   }
+  // What the self-check found at this row is written after it, as records' own detector rows (self-check.ts).
+  for (const g of selfChecks.gapsOf(found)) write(g, VESSEL_ID, DETECTOR)
   return { status: 200, body: row }
 }
 

@@ -30,7 +30,7 @@ const say = (line: string): void => {
   if (line !== said) console.log(`[records] ${line}`)
   said = line
 }
-const travelOf = (seen: Row[]): Travel | undefined => {
+export const travelOf = (seen: Row[]): Travel | undefined => {
   const row = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === SELECTION).sort((a, b) => a.seq - b.seq).at(-1)
   if (row === undefined) { say("credits selection row absent: depth 0 only"); return undefined }
   const bad = (Object.keys(BOUNDS) as Required[]).find((k) => {
@@ -127,10 +127,10 @@ export const openPersonWaits = (seen: Row[]): Row[] => {
 // infra window of its status (an outage or an install's restart cut the call: the move was stopped, not failed, so it
 // neither stops credit through its selection nor counts against it). The window's rule is moveFailuresOf's: its span,
 // written after the span, and the statuses it names.
-const moveFailed = (seen: Row[]): ((r: Row) => boolean) => {
-  const windows = infraWindowsOf(seen)
-  return (r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip" && !inInfraWindow(r, windows)
-}
+const moveFailed = (seen: Row[]): ((r: Row) => boolean) => moveFailedIn(infraWindowsOf(seen))
+// The same reading under windows already read: for a reader that keeps the windows as rows arrive (self-check.ts).
+export const moveFailedIn = (windows: InfraWindow[]): ((r: Row) => boolean) =>
+  (r) => r.shape === FAILURE && r.role === WALK && r.kind !== "skip" && !inInfraWindow(r, windows)
 // The selections whose own move failed: a failure row the walk that made the selection wrote (moveFailed).
 const failedOf = (seen: Row[], sels: Map<string, Row>): Set<string> => new Set(seen
   .filter(moveFailed(seen))
@@ -553,8 +553,8 @@ const blamed = (f: Row): string => typeof f.blames === "string" ? f.blames
 // covers only rows written before it (its span ends at its own seq at the latest), so no row excuses failures yet to
 // come (qa: a standing exemption would be a fiat that never ends). The latest row per window_id decides (a later row
 // with retracted: true withdraws it). Rows that do not say all three are ignored.
-type InfraWindow = { from: number; to: number; statuses: Set<number> }
-const infraWindowsOf = (seen: Row[]): InfraWindow[] => {
+export type InfraWindow = { from: number; to: number; statuses: Set<number> }
+export const infraWindowsOf = (seen: Row[]): InfraWindow[] => {
   const latest = new Map<string, Row>()
   for (const r of seen.filter((x) => x.shape === INFRA_WINDOW && x.role === OWNER).sort((a, b) => a.seq - b.seq)) latest.set(String(r.window_id ?? r.id), r)
   return [...latest.values()].filter((r) => r.retracted !== true).flatMap((r) => {
