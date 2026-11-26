@@ -9,8 +9,8 @@
 // What the fold's own rules decide (which failures count, what a selection consumed) is read through the fold's own
 // functions over an index kept the way indexOf builds it.
 import { createHash } from "node:crypto"
-import { indexOf, infraWindowsOf, moveFailedIn, reached, travelOf, type Index, type InfraWindow, type Travel } from "./fold"
-import { CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, INFRA_WINDOW, OUTCOME, OWNER, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { indexOf, infraWindowsOf, moveFailedIn, reached, templateOwnStats, travelOf, type Index, type InfraWindow, type Travel } from "./fold"
+import { ACTIVITY_TEMPLATE, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, INFRA_WINDOW, OUTCOME, OWNER, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export const SELF_CHECK = "self-check:"
@@ -239,4 +239,67 @@ export const parityOf = (rows: Row[]): { kept: Index; built: Index } => {
   const c = checker()
   for (const r of [...rows].sort((a, b) => a.seq - b.seq)) c.see(r)
   return { kept: c.index, built: indexOf(rows) }
+}
+
+export const GRADUATE_PREFIX = "graduate-template:"
+const GRAD_MIN_RUNS = 8
+const GRAD_MIN_RATE = 0.85
+
+// Certainty-driven resolver graduation detector: emits a `graduate-template:<id>` gap when a non-retired described
+// activity_template (containing a channel produce step or multiple steps) accumulates >= 8 own graded runs at >= 0.85
+// success rate, and closes it if a previously opened graduation gap drops below 0.85.
+export const graduationGapsOf = (rows: Row[], existingGapRows?: Row[]): Array<Record<string, unknown>> => {
+  const eligible = (r: Row): boolean => {
+    if (r.shape !== ACTIVITY_TEMPLATE || r.role !== DESCRIBED || r.retired === true) return false
+    if (!Array.isArray(r.calls) || r.calls.length === 0) return false
+    const hasVia = r.calls.some((c) => typeof c === "object" && c !== null &&
+      ((c as { via_ref?: unknown }).via_ref !== undefined ||
+        ((c as { pointer?: { via_ref?: unknown } }).pointer?.via_ref !== undefined)))
+    return hasVia || r.calls.length > 1
+  }
+  const tpls = rows.filter(eligible)
+  if (tpls.length === 0) return []
+  const head = rows.reduce((m, r) => Math.max(m, r.seq), 0)
+  const gapSource = existingGapRows ?? rows.filter((r) => r.shape === GAP && r.role === DETECTOR)
+  const openGrad = new Map<string, Row>()
+  for (const g of [...gapSource].filter((r) => String(r.gap_id ?? "").startsWith(GRADUATE_PREFIX)).sort((a, b) => a.seq - b.seq)) {
+    const id = String(g.gap_id)
+    if (g.status === "open") openGrad.set(id, g)
+    else openGrad.delete(id)
+  }
+  const out: Array<Record<string, unknown>> = []
+  for (const tpl of tpls) {
+    const gapId = `${GRADUATE_PREFIX}${tpl.id.slice(0, 12)}`
+    const stats = templateOwnStats(rows, tpl.id, head, head)
+    const isOpen = openGrad.has(gapId)
+    const sig = (tpl.sig ?? {}) as { in?: unknown; out?: unknown }
+    if (stats.n >= GRAD_MIN_RUNS && stats.rate >= GRAD_MIN_RATE) {
+      if (!isOpen) {
+        out.push({
+          shape: GAP,
+          gap_id: gapId,
+          status: "open",
+          category: "resolver_graduation",
+          severity: "low",
+          repo: "local-tools-vessel",
+          summary: `Template ${tpl.id} (sig.in=${JSON.stringify(sig.in ?? [])}, sig.out=${JSON.stringify(sig.out ?? [])}) reached alpha=${stats.alpha.toFixed(2)}, beta=${stats.beta.toFixed(2)} (n=${stats.n}, rate=${(stats.rate * 100).toFixed(1)}%); ready to graduate into a deterministic local-tools resolver`,
+          input_refs: [tpl.id],
+          meta: { template_id: tpl.id, sig: tpl.sig, alpha: stats.alpha, beta: stats.beta, n: stats.n, rate: stats.rate },
+        })
+      }
+    } else if (isOpen && stats.rate < GRAD_MIN_RATE) {
+      out.push({
+        shape: GAP,
+        gap_id: gapId,
+        status: "closed",
+        category: "resolver_graduation",
+        severity: "low",
+        repo: "local-tools-vessel",
+        summary: `Template ${tpl.id} dropped below graduation threshold (alpha=${stats.alpha.toFixed(2)}, beta=${stats.beta.toFixed(2)}, n=${stats.n}, rate=${(stats.rate * 100).toFixed(1)}%)`,
+        input_refs: [tpl.id],
+        meta: { template_id: tpl.id, sig: tpl.sig, alpha: stats.alpha, beta: stats.beta, n: stats.n, rate: stats.rate },
+      })
+    }
+  }
+  return out
 }

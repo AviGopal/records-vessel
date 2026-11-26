@@ -2,12 +2,12 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR, VESSEL_ID } from "./config"
-import { checker } from "./self-check"
+import { checker, GRADUATE_PREFIX, graduationGapsOf } from "./self-check"
 import { rowsIn } from "./rows-file"
-import { deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
-import { LAPSE, blames, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
+import { CONSTITUTIONAL_TARGETS, deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
+import { LAPSE, blames, gapClosures, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
 import {
-  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, WALK, PERSON_WAIT, ASK_STATE, WAIT_BOUND,
+  ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, TREATED, WALK, PERSON_WAIT, ASK_STATE, WAIT_BOUND,
 } from "./shapes"
 
 export type Row = { shape: string; id: string; seq: number; t: string; writer: string; role: string; input_refs: string[]; [k: string]: unknown }
@@ -85,7 +85,14 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
     return { status: 400, body: { failure: { status: 400, body: `${ASK_STATE}: derived on read from the rows on each open ask, never written` } } }
   }
   if (OWNER_SHAPES.has(String(body.shape))) {
-    if (role !== OWNER) {
+    const openTopology = role === DESCRIBED && (
+      (body.shape === SHAPE_SCHEMA && typeof body.target === "string" && body.target.trim() !== "" &&
+        !CONSTITUTIONAL_TARGETS.has(body.target.trim()) && body.ask !== true &&
+        ![body.inputs ?? []].flat().some((e) => typeof e === "object" && e !== null && (e as { ask?: unknown }).ask === true)) ||
+      (body.shape === SHAPE_DESCRIPTION && typeof body.of === "string" && body.of.trim() !== "" &&
+        !CONSTITUTIONAL_TARGETS.has(body.of.trim()))
+    )
+    if (role !== OWNER && !openTopology) {
       return { status: 403, body: { failure: { status: 403, body: role } } }
     }
   }
@@ -118,6 +125,10 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   }
   // What the self-check found at this row is written after it, as records' own detector rows (self-check.ts).
   for (const g of selfChecks.gapsOf(found)) write(g, VESSEL_ID, DETECTOR)
+  // Certainty-driven template graduation check on terminal writes only (closed non-graduation gaps, person outcomes).
+  const isTerminal = (row.shape === GAP && row.role === DETECTOR && row.status !== "open" && !String(row.gap_id ?? "").startsWith(GRADUATE_PREFIX)) ||
+    (row.shape === OUTCOME && row.role === PERSON)
+  if (isTerminal) for (const g of graduationGapsOf(rows)) write(g, VESSEL_ID, DETECTOR)
   return { status: 200, body: row }
 }
 
@@ -231,7 +242,38 @@ const openGaps = (from: Row[]): Row[] => {
   // (the USER: infra gaps are gaps, marked, not offered to the walk). Read from the detector's own field, never from what
   // kind of gap it is.
   const notWalkable = (r: Row): boolean => r.walkable === false
-  return [...latest.values()].filter((r) => r.status === "open" && !held(r) && !notRunnable(r) && !notWalkable(r))
+  const eligible = [...latest.values()].filter((r) => !held(r) && !notRunnable(r) && !notWalkable(r))
+  const open = eligible.filter((r) => r.status === "open")
+  const closedCandidates = eligible.filter((r) => r.status === "closed")
+  if (closedCandidates.length === 0) return open
+  // Bounded 1-selection post-close extraction window: a gap closed via a credited detector closure (git_land) stays
+  // open for at most one post-close selection (e.g., template extraction), then exits immediately.
+  const head = from.reduce((m, r) => Math.max(m, r.seq), 0)
+  const okClosures = new Set(gapClosures(from, head, head).filter((g) => g.ok).map((g) => g.id))
+  const creditedClosed = closedCandidates.filter((r) => okClosures.has(r.id))
+  if (creditedClosed.length === 0) return open
+  const byGap = new Map<string, Row[]>()
+  for (const r of from) {
+    if (r.shape !== GAP || r.role !== DETECTOR || r.gap_id === undefined) continue
+    into(byGap, String(r.gap_id), r)
+  }
+  const sels = from.filter((x) => x.shape === SELECTION)
+  const postClose = creditedClosed.filter((r) => {
+    const same = (byGap.get(String(r.gap_id)) ?? []).filter((x) => x.seq <= r.seq).sort((a, b) => a.seq - b.seq)
+    const prevNonOpenSeq = same.filter((x) => x.status !== "open" && x.seq < r.seq).at(-1)?.seq ?? 0
+    const episodeIds = new Set(same.filter((x) => x.seq > prevNonOpenSeq && x.seq <= r.seq).map((x) => x.id))
+    const postSels = sels.filter((s) => s.seq > r.seq && (
+      (typeof s.root === "string" && episodeIds.has(s.root)) ||
+      [s.pool_refs, s.input_refs].flat().some((id) => episodeIds.has(String(id)))
+    ))
+    if (postSels.length > 0) return false
+    const postSelIds = new Set(sels.filter((s) => s.seq > r.seq).map((s) => s.id))
+    const hasPostTpl = from.some((t) => t.shape === ACTIVITY_TEMPLATE && t.seq > r.seq &&
+      postSelIds.has(String(t.selection_ref)) &&
+      [t.input_refs].flat().some((id) => episodeIds.has(String(id))))
+    return !hasPostTpl
+  })
+  return [...open, ...postClose]
 }
 
 // The asks the owner declares (asks.ts declaredAsks), over the whole store.
@@ -276,7 +318,7 @@ const episodeOf = (root: Row, gaps: Map<string, Row[]>): Row[] => {
   if (!isGapRoot(root)) return [root]
   const same = (gaps.get(String(root.gap_id)) ?? []).filter((r) => r.seq <= root.seq)
     .sort((a, b) => a.seq - b.seq)
-  const since = same.filter((r) => r.status !== "open").at(-1)?.seq ?? 0
+  const since = same.filter((r) => r.status !== "open" && r.seq < root.seq).at(-1)?.seq ?? 0
   return same.filter((r) => r.seq > since)
 }
 
@@ -383,27 +425,65 @@ const rootRows = (w: string, roots: Row[]): Row[][] => {
   return out
 }
 
-// A template is earned, not declared (law 4): it is the walk's to run only when it replays a run that reached. Its own
-// selection worked a request a person graded done (r 1, the grade that closes a request), and every call it lists, in
-// order, is a call that ended in that request's work (a call or a template's call whose hop ended; the shape it called
-// is on the started hop of the same call_id). A template a producer declared from anything else, a failed run or an
-// ask still open, or one calling what the run never called, is not offered: it stays in the store, unread by the walk.
-const earned = (w: string): (t: Row) => boolean => {
+// Verified-closed roots: asks closed by a person's r=1 grade, plus every gap row belonging to a credited detector
+// gap closure episode (mapped to a shared episode key so pre-close work and post-close extraction share one trace).
+const verifiedClosedEpisodes = (): { done: Set<string>; episodeKey: Map<string, string>; byId: Map<string, Row> } => {
   const byId = new Map(rows.map((r) => [r.id, r]))
   const done = new Set(standing(rows, seq, seq).filter((k) => k.r === 1 && k.by === PERSON)
     .flatMap((k) => [byId.get(k.judged)?.input_refs].flat().map(String)))
+  const episodeKey = new Map<string, string>()
+  const okClosures = new Set(gapClosures(rows, seq, seq).filter((g) => g.ok).map((g) => g.id))
+  if (okClosures.size > 0) {
+    const byGap = new Map<string, Row[]>()
+    for (const r of rows) {
+      if (r.shape !== GAP || r.role !== DETECTOR || r.gap_id === undefined) continue
+      into(byGap, String(r.gap_id), r)
+    }
+    for (const gs of byGap.values()) {
+      let open: string[] = []
+      for (const c of [...gs].sort((a, b) => a.seq - b.seq)) {
+        if (c.status === "open") { open.push(c.id); continue }
+        if (open.length > 0 && okClosures.has(c.id)) {
+          for (const id of open) { done.add(id); episodeKey.set(id, c.id) }
+          done.add(c.id)
+          episodeKey.set(c.id, c.id)
+        }
+        open = []
+      }
+    }
+  }
+  return { done, episodeKey, byId }
+}
+
+const isEarnedDescriptor = (r: Row, done: Set<string>, byId: Map<string, Row>): boolean => {
+  if (r.role !== DESCRIBED || (r.shape !== SHAPE_SCHEMA && r.shape !== SHAPE_DESCRIPTION)) return false
+  const s = byId.get(String(r.selection_ref))
+  if (s === undefined || s.shape !== SELECTION || String(s.arm) !== TREATED) return false
+  return [s.root, s.pool_refs, s.input_refs].flat().filter((x) => x !== undefined).some((id) => done.has(String(id)))
+}
+
+// A template is earned, not declared (law 4): it is the walk's to run only when it replays a run that reached. Its own
+// selection worked a request a person graded done (r 1, the grade that closes a request) or a credited detector gap
+// closure episode, and every call it lists, in order, is a call that ended in that request's work (a call or a
+// template's call whose hop ended; the shape it called is on the started hop of the same call_id). A template a
+// producer declared from anything else, a failed run or an ask still open, or one calling what the run never called,
+// is not offered: it stays in the store, unread by the walk.
+const earned = (w: string, verified: { done: Set<string>; episodeKey: Map<string, string>; byId: Map<string, Row> }): (t: Row) => boolean => {
+  const { done, episodeKey, byId } = verified
+  const keyOf = (id: string): string => episodeKey.get(id) ?? id
   const sels = rows.filter((r) => r.shape === SELECTION && r.writer === w)
   const started = new Map(rows.filter((r) => r.shape === HOP && r.writer === w && r.phase === "started").map((r) => [String(r.call_id), String(r.pointer_type)]))
-  // Which selections worked each request a person graded done, found in one pass over the selections' lists (a
-  // selection written before the walk kept only its root carries its whole pool there), not once per template.
+  // Which selections worked each request a person graded done (or credited closed gap episode), found in one pass over
+  // the selections' lists, not once per template.
   const byRoot = new Map<string, Set<string>>()
   for (const s of sels) {
-    for (const id of [s.pool_refs].flat()) {
+    for (const id of [s.root, s.pool_refs, s.input_refs].flat().filter((x) => x !== undefined)) {
       const k = String(id)
       if (!done.has(k)) continue
-      const set = byRoot.get(k)
+      const g = keyOf(k)
+      const set = byRoot.get(g)
       if (set) set.add(s.id)
-      else byRoot.set(k, new Set([s.id]))
+      else byRoot.set(g, new Set([s.id]))
     }
   }
   // The walk's ended calls, in store order, found once per read, not once per template's root: each root keeps those of
@@ -423,16 +503,18 @@ const earned = (w: string): (t: Row) => boolean => {
   return (t: Row): boolean => {
     const own = byId.get(String(t.selection_ref))
     const calls = [t.calls].flat().map((c) => String((c as { shape?: unknown } | undefined)?.shape ?? ""))
-    return [own?.pool_refs].flat().map(String).filter((id) => done.has(id)).some((root) => replays(calls, calledIn(root)))
+    return [own?.root, own?.pool_refs, own?.input_refs].flat().filter((x) => x !== undefined).map(String)
+      .filter((id) => done.has(id)).some((id) => replays(calls, calledIn(keyOf(id))))
   }
 }
 
-// What every root's work shares: the owner's configuration (below), the templates the walk earned, and the templates a
-// standing rhythm names (the walk runs those only when their rhythm is due).
+// What every root's work shares: the owner's configuration (below), the templates the walk earned, verified-closed
+// open-topology descriptors (shape_schema / shape_description), and the templates a standing rhythm names.
 const SHARED_UNTIL_DECLARED = new Set([CHANNEL, SHAPE_SCHEMA, REQUIRES, REPOSITORY, RHYTHM])
 const shared = (w: string): Row[] => {
   const allSels = new Set(rows.filter((r) => r.shape === SELECTION).filter((r) => r.writer === w).map((r) => r.id))
-  const ok = earned(w)
+  const verified = verifiedClosedEpisodes()
+  const ok = earned(w, verified)
   const scheduled = rhythmTemplates()
   // The owner's configuration: once asks are declared, every owner row that is not one (whatever its shape: a new setting
   // the walk reads reaches it with no change here); until then, the listed shapes, as before.
@@ -441,6 +523,7 @@ const shared = (w: string): Row[] => {
     (declared === undefined ? SHARED_UNTIL_DECLARED.has(r.shape) : !declared.has(r.shape))
   return rows.filter((r) =>
     config(r) ||
+    ((r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED && isEarnedDescriptor(r, verified.done, verified.byId)) ||
     (r.shape === ACTIVITY_TEMPLATE && (r.role === DESCRIBED || r.role === OWNER) && scheduled.has(r.id)) ||
     (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) && ok(r)))
 }
@@ -928,7 +1011,11 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
     const states = openAskStates().filter((r) => Object.entries(q.where ?? {}).every(([k, v]) => holds(r[k], v)))
     return q.limit === undefined ? states : states.slice(-q.limit)
   }
-  const matched = read(q)
+  let matched = read(q)
+  if (q.stored !== true && matched.some((r) => (r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED)) {
+    const { done, byId } = verifiedClosedEpisodes()
+    matched = matched.filter((r) => !((r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED) || isEarnedDescriptor(r, done, byId))
+  }
   const kept = q.limit === undefined ? matched : matched.slice(-q.limit)
   return withStanding(q.stored === true ? kept : withUse(factsOn(kept)))
 }

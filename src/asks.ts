@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: MIT
 // WHAT AN ASK IS: one predicate for every reader that asks it (the open roots, the deadline rule's lapses, the lapses a
 // grader is shown, a promise's exemption), so a row is an ask to all of them or to none.
-import { ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, FAILURE_RULE, HOLD_FACT, INFRA_WINDOW, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SHAPE_DESCRIPTION, SHAPE_SCHEMA, WAIT_BOUND } from "./shapes"
+import { ACTIVITY_TEMPLATE, ARM, ASK_STATE, CHANNEL, CREDITS, DESCRIBED, FAILURE_RULE, GAP, HOLD_FACT, INFRA_WINDOW, LAND_VERDICT, OPERATOR, OUTCOME, OWNER, PERSON, PERSON_WAIT, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SHAPE_DESCRIPTION, SHAPE_SCHEMA, WAIT_BOUND } from "./shapes"
 import type { Row } from "./store"
 
 export const OWNER_SHAPES = new Set([CHANNEL, SHAPE_SCHEMA, SHAPE_DESCRIPTION, ARM, PRIOR, REQUIRES, CREDITS, REPOSITORY, RHYTHM, FAILURE_RULE, INFRA_WINDOW, HOLD_FACT, WAIT_BOUND])
+// Shapes whose schema or description is constitutional to the walk/store protocol: only OWNER may write them.
+// DESCRIBED producers may propose novel open-topology intermediate shape_schema / shape_description rows outside this set.
+export const CONSTITUTIONAL_TARGETS = new Set<string>([
+  "answer", "due", "request", "change_wanted", "world_changed",
+  OUTCOME, LAND_VERDICT, ACTIVITY_TEMPLATE, GAP, PERSON_WAIT, ASK_STATE,
+  ...OWNER_SHAPES,
+])
 // Whose rows are asks and what the walk answers (the roots, what wakes a wait, whose deadlines lapse): a person's, the
 // owner's, and an operator's. Only a person's are verdicts (store.ts closed, earned).
 export const EXO_ROLES = new Set([PERSON, OWNER, OPERATOR])

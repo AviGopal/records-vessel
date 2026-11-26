@@ -175,6 +175,16 @@ const consumedOf = (index: Index): ((sel: Row) => string[]) => {
     const s = sels.get(String(sid))
     return s !== undefined && String(s.a ?? "").startsWith("run/") && !failed.has(s.id) ? s : undefined
   }
+  // Nested child sub-template calls executed inside a non-failed run selection (hops carrying template_ref).
+  const childTemplates = new Map<string, string[]>()
+  for (const h of byId.values()) {
+    if (h.shape !== HOP || h.role !== WALK || h.phase !== "ended" || typeof h.template_ref !== "string") continue
+    const sid = String(h.selection_ref)
+    if (failed.has(sid)) continue
+    const list = childTemplates.get(sid)
+    if (list === undefined) childTemplates.set(sid, [h.template_ref])
+    else if (!list.includes(h.template_ref)) list.push(h.template_ref)
+  }
   return (sel: Row): string[] => {
     const a = String(sel.a ?? "")
     // A call a request asked for consumed the request. A call offered with no request (the step a gated call's chain
@@ -186,7 +196,11 @@ const consumedOf = (index: Index): ((sel: Row) => string[]) => {
       const took = (sel.frontier as { id?: unknown } | undefined)?.id
       return took === undefined ? [] : [String(took)]
     }
-    if (a.startsWith("run/")) return [a.slice("run/".length)]
+    if (a.startsWith("run/")) {
+      const parentId = a.slice("run/".length)
+      const children = childTemplates.get(sel.id)
+      return children === undefined ? [parentId] : [...new Set([parentId, ...children])]
+    }
     return (made.get(sel.id) ?? []).flatMap((p) => {
       const shown = new Set([p.input_refs].flat().map(String))
       const ins = inputs.get(String(p.shape)) ?? new Set<string>()
@@ -578,6 +592,14 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const windows = infraWindowsOf(seen)
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
   const byId = new Map(seen.map((r) => [r.id, r]))
+  const childTplsBySel = new Map<string, Set<string>>()
+  for (const h of seen) {
+    if (h.shape !== HOP || h.role !== WALK || typeof h.template_ref !== "string") continue
+    const sid = String(h.selection_ref)
+    const set = childTplsBySel.get(sid)
+    if (set) set.add(h.template_ref)
+    else childTplsBySel.set(sid, new Set([h.template_ref]))
+  }
   const out = new Map<string, Grade>()
   for (const f of seen.filter((r) => r.shape === FAILURE && r.role === WALK && r.seq <= asOf)) {
     const s = sels.get(String(f.selection_ref))
@@ -598,6 +620,16 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     const writer = t !== undefined && t.shape === ACTIVITY_TEMPLATE ? sels.get(String(t.selection_ref)) : undefined
     if (writer !== undefined && String(writer.arm) === TREATED) {
       out.set(`mint|${s.id}`, { id: f.id, ok: true, r: 0, judged: writer.id, key: `mint|${s.id}`, cells: new Set([String(writer.cell)]), weights: new Map([[String(writer.cell), 1]]), by: WALK, deadline: false })
+    }
+    if (a.startsWith("run/")) {
+      for (const childTplId of childTplsBySel.get(s.id) ?? []) {
+        const childTpl = byId.get(childTplId)
+        const childWriter = childTpl !== undefined && childTpl.shape === ACTIVITY_TEMPLATE ? sels.get(String(childTpl.selection_ref)) : undefined
+        if (childWriter !== undefined && String(childWriter.arm) === TREATED) {
+          const key = `mint-child|${s.id}|${childTplId}`
+          out.set(key, { id: f.id, ok: true, r: 0, judged: childWriter.id, key, cells: new Set([String(childWriter.cell)]), weights: new Map([[String(childWriter.cell), 1]]), by: WALK, deadline: false })
+        }
+      }
     }
   }
   // A plan this request cannot fill (the walk's skip naming unbound placeholders, or a run stopped at one: kind unbound)
@@ -640,18 +672,70 @@ export const closerRed = (r: Row): boolean => {
   const count = ((r.meta ?? {}) as { closer_evidence?: { count?: unknown } }).closer_evidence?.count
   return typeof count === "string" && /(^|, )0*[1-9][0-9]* fail(,|$)/.test(count)
 }
+// Shared credit calculation for both gapClosuresScan and gapClosuresOf so lazy and scan paths stay byte-equal.
+// Credits every selection in chain at weight 1, any cross-root treated minter of a run/* template at gamma, and any
+// nested child sub-template (ended hop with template_ref) at gamma (child run cell) and gamma^2 (child minter).
+const closureCredits = (
+  byId: Map<string, Row>,
+  sels: Map<string, Row>,
+  failed: Set<string>,
+  endedChildHops: Row[],
+  chain: Row[],
+  since: number,
+  closeSeq: number,
+  t: Travel | undefined,
+): Map<string, number> => {
+  const weights = new Map<string, number>()
+  const credit = (cell: string, w: number): void => { weights.set(cell, Math.max(weights.get(cell) ?? 0, w)) }
+  const gamma = t?.gamma ?? 1
+  const chainById = new Map<string, Row>()
+  for (const s of chain) {
+    chainById.set(s.id, s)
+    credit(String(s.cell), 1)
+    const a = String(s.a ?? "")
+    if (a.startsWith("run/")) {
+      const tpl = byId.get(a.slice(4))
+      if (tpl?.shape === ACTIVITY_TEMPLATE) {
+        const mintSel = sels.get(String(tpl.selection_ref))
+        if (mintSel !== undefined && !failed.has(mintSel.id)) credit(String(mintSel.cell), gamma)
+      }
+    }
+  }
+  for (const h of endedChildHops) {
+    if (!(h.seq > since && h.seq < closeSeq)) continue
+    const sid = String(h.selection_ref)
+    if (failed.has(sid)) continue
+    const parentSel = chainById.get(sid)
+    if (parentSel === undefined) continue
+    const childTpl = byId.get(String(h.template_ref))
+    if (childTpl === undefined) continue
+    if (typeof parentSel.cell === "string" && parentSel.cell !== "") {
+      const ctxSuffix = parentSel.cell.includes("|") ? parentSel.cell.slice(parentSel.cell.indexOf("|")) : ""
+      credit(`run/${childTpl.id}${ctxSuffix}`, gamma)
+    }
+    if (childTpl.shape === ACTIVITY_TEMPLATE) {
+      const childMintSel = sels.get(String(childTpl.selection_ref))
+      if (childMintSel !== undefined && !failed.has(childMintSel.id)) credit(String(childMintSel.cell), gamma * gamma)
+    }
+  }
+  return weights
+}
 export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
   const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
   if (by === undefined) return []
+  const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED)
+  const selsById = new Map(sels.map((r) => [r.id, r]))
   const failed = new Set(seen
     .filter(moveFailed(seen))
     .map((r) => String(r.selection_ref)))
   const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started" && r.pointer_type === by)
     .map((r) => [String(r.call_id), r]))
   const ended = seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "ended" && started.has(String(r.call_id)))
+  const endedChildHops = seen.filter((h) => h.shape === HOP && h.role === WALK && h.phase === "ended" && typeof h.template_ref === "string")
+  const t = travelOf(seen)
   const out: Grade[] = []
   const byGap = new Map<string, Row[]>()
   for (const r of seen.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined).sort((a, b) => a.seq - b.seq)) {
@@ -668,9 +752,10 @@ export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[
         const chain = sels.filter((s) => s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id))
         const ids = new Set(chain.map((s) => s.id))
         const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
+        const weights = landed ? closureCredits(byId, selsById, failed, endedChildHops, chain, since, c.seq, t) : new Map<string, number>()
         out.push({
-          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
-          weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),
+          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(weights.keys()),
+          weights,
           by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
         })
       }
@@ -697,6 +782,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
   const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
   if (by === undefined) return []
+  const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED).map((r) => [r.id, r]))
   const failed = new Set(seen
     .filter(moveFailed(seen))
@@ -704,6 +790,8 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const started = new Map(seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "started" && r.pointer_type === by)
     .map((r) => [String(r.call_id), r]))
   const ended = seen.filter((r) => r.shape === HOP && r.role === WALK && r.phase === "ended" && started.has(String(r.call_id)))
+  const endedChildHops = seen.filter((h) => h.shape === HOP && h.role === WALK && h.phase === "ended" && typeof h.template_ref === "string")
+  const t = travelOf(seen)
   const out: Grade[] = []
   const byGap = new Map<string, Row[]>()
   for (const r of seen.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined).sort((a, b) => a.seq - b.seq)) {
@@ -720,9 +808,10 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
         const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
         const landed = ended.some((e) => e.seq < c.seq && inChain(sels.get(String(started.get(String(e.call_id))?.selection_ref))))
         const chain = landed ? gather([...sels.values()], inChain) : []
+        const weights = landed ? closureCredits(byId, sels, failed, endedChildHops, chain, since, c.seq, t) : new Map<string, number>()
         out.push({
-          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(landed ? chain.map((s) => String(s.cell)) : []),
-          weights: new Map(landed ? chain.map((s): [string, number] => [String(s.cell), 1]) : []),
+          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(weights.keys()),
+          weights,
           by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
         })
       }
@@ -1019,8 +1108,80 @@ const useGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   }
   return [...out.values()]
 }
+// Forward-arm context|<target>|<context_shape> grades: derived purely from described rows' uses + terminal root
+// outcomes (person verdicts, lapses, credited gap closures, and closerRed verdicts) up to asOf.
+const contextUseGradesOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
+  const seen = all.filter((r) => r.seq <= atSeq)
+  const byId = new Map(seen.map((r) => [r.id, r]))
+  const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const rootGrade = new Map<string, number>()
+  const lapsedRoots = new Set<string>()
+  const stood = standing(all, asOf, atSeq)
+  const rootsForGrade = (judgedId: string): string[] => {
+    const j = byId.get(judgedId)
+    const ids = new Set<string>(refsOfRow(j))
+    const r = sels.get(String(j?.selection_ref))?.root
+    if (typeof r === "string") ids.add(r)
+    return [...ids]
+  }
+  for (const k of stood) {
+    if (k.deadline && k.r === 0) {
+      for (const id of rootsForGrade(k.judged)) { lapsedRoots.add(id); rootGrade.set(id, 0) }
+    } else if (k.by === PERSON && k.r === 0) {
+      for (const id of rootsForGrade(k.judged)) rootGrade.set(id, 0)
+    }
+  }
+  for (const k of stood) {
+    if (k.by === PERSON && k.r === 1) {
+      for (const id of rootsForGrade(k.judged)) if (!lapsedRoots.has(id) && rootGrade.get(id) !== 0) rootGrade.set(id, 1)
+    }
+  }
+  const closedOkIds = new Set(gapClosures(all, asOf, atSeq).filter((k) => k.ok).map((k) => k.id))
+  const byGap = new Map<string, Row[]>()
+  for (const r of seen.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined).sort((a, b) => a.seq - b.seq)) {
+    if (!byGap.has(String(r.gap_id))) byGap.set(String(r.gap_id), [])
+    byGap.get(String(r.gap_id))!.push(r)
+  }
+  for (const gs of byGap.values()) {
+    let open: Row[] = []
+    for (const c of gs) {
+      if (c.status === "open") {
+        open.push(c)
+        if (closerRed(c) && c.seq <= asOf) for (const g of open) rootGrade.set(g.id, 0)
+        continue
+      }
+      if (open.length > 0 && c.seq <= asOf && closedOkIds.has(c.id)) {
+        for (const g of open) rootGrade.set(g.id, 1)
+        rootGrade.set(c.id, 1)
+      }
+      open = []
+    }
+  }
+  const out: Grade[] = []
+  for (const d of seen) {
+    if (d.seq > asOf || d.role !== DESCRIBED || d.shape === OUTCOME) continue
+    const s = sels.get(String(d.selection_ref))
+    if (s === undefined || String(s.arm) !== TREATED || typeof s.root !== "string") continue
+    const rootR = rootGrade.get(s.root)
+    if (rootR === undefined) continue
+    const shapes = new Set<string>()
+    for (const id of [d.uses ?? []].flat()) {
+      const src = byId.get(String(id))
+      if (src !== undefined && typeof src.shape === "string" && src.shape !== "") shapes.add(src.shape)
+    }
+    for (const srcShape of shapes) {
+      const cell = `context|${String(d.shape)}|${srcShape}`
+      out.push({
+        id: d.id, ok: true, r: rootR, judged: d.id, key: `ctx|${d.id}|${srcShape}`,
+        cells: new Set([cell]), weights: new Map([[cell, 1]]), by: "use", deadline: false,
+      })
+    }
+  }
+  return out
+}
 export const useGrades = memo(useGradesOf)
 export const landGrades = memo(landGradesOf)
+export const contextUseGrades = memo(contextUseGradesOf)
 // The same, computed fresh: what a check compares the kept answers with.
 export const fresh = { grades: gradesOf, moveFailures: moveFailuresOf, gapClosures: gapClosuresOf, promiseGrades: promiseGradesOf, landGrades: landGradesOf, useGrades: useGradesOf }
 
@@ -1034,20 +1195,56 @@ const asker = (c: string): string | undefined => c.split("|").slice(1).join("|")
 // A cell's move and asker, as move() and asker() give them: what foldFrom splits each cell string into, once per read.
 export const cellParts = (c: string): { move: string; asker: string | undefined } => ({ move: move(c), asker: asker(c) })
 
-export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
-  const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
+const latestGradesOf = (all: Row[], asOf: number, atSeq: number, t: Travel | undefined): Grade[] => {
   const closures = gapClosures(all, asOf, atSeq).filter((k) => k.ok)
   // Credit originates only at a person's verdict or a lapse (r 0 on a passed deadline, however records wrote it, the
   // walk's own lapse rows included), each at its owner weight, and at a closure. The walk's own described grade of its
   // answer is a model judging an outcome: it stays a row (closing and lapse detection read it) but originates nothing.
-  const t = travelOf(all.filter((r) => r.seq <= atSeq))
   const scale = (k: Grade, w: number): Grade => ({ ...k, weights: new Map([...k.weights].map(([c, g]) => [c, g * w])) })
   const by = (k: Grade, w: "w_person" | "w_lapse" | "w_close"): Grade => t === undefined ? k : scale(k, t[w])
   const originated = standing(all, asOf, atSeq).flatMap((k) =>
     k.deadline && k.r === 0 ? [by(k, "w_lapse")] : k.by === PERSON ? [by(k, "w_person")] : [])
   const promised = t?.w_check === undefined ? [] : promiseGrades(all, asOf, atSeq).map((k) => scale(k, t.w_check as number))
   const landed = landGrades(all, asOf, atSeq).map((k) => by(k, "w_person"))
-  const latest = [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed, ...useGrades(all, asOf, atSeq)].map((k) => [k.key, k])).values()]
+  return [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed, ...useGrades(all, asOf, atSeq)].map((k) => [k.key, k])).values()]
+}
+
+// Own move-level graded statistics for a template `run/<tplId>`, isolated from kind-level inheritance and prior_count.
+export const templateOwnStats = (all: Row[], tplId: string, asOf: number, atSeq: number): { n: number; alpha: number; beta: number; rate: number } => {
+  const t = travelOf(all.filter((r) => r.seq <= atSeq))
+  const target = `run/${tplId}`
+  let n = 0, wins = 0, losses = 0
+  for (const k of latestGradesOf(all, asOf, atSeq, t)) {
+    let w = 0
+    for (const [x, g] of k.weights) if (move(x) === target && g > w) w = g
+    if (w <= 0) continue
+    n++
+    wins += k.r * w
+    losses += (1 - k.r) * w
+  }
+  const alpha = 1 + wins
+  const beta = 1 + losses
+  return { n, alpha, beta, rate: alpha / (alpha + beta) }
+}
+
+export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
+  const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
+  const t = travelOf(all.filter((r) => r.seq <= atSeq))
+  const latest = latestGradesOf(all, asOf, atSeq, t)
+  // Fast path: context| grades are only computed when at least one requested cell asks for context|<target>|<shape>,
+  // and stay strictly isolated from normal cell/move/kind indexes so normal posteriors are byte-for-byte unchanged.
+  const isCtx = (c: unknown): c is string => typeof c === "string" && c.startsWith("context|")
+  const wantContext = cells.some(isCtx)
+  const ctxByCell = new Map<string, Grade[]>()
+  if (wantContext) {
+    for (const k of contextUseGrades(all, asOf, atSeq)) {
+      for (const x of k.cells) {
+        const l = ctxByCell.get(x)
+        if (l === undefined) ctxByCell.set(x, [k])
+        else if (l[l.length - 1] !== k) l.push(k)
+      }
+    }
+  }
   // EACH CELL STRING IS SPLIT ONCE PER READ, AND THE GRADES ARE INDEXED ONCE PER READ: by cell, by move, and by move and
   // asker, here in this call and kept by nothing after it (the next read's grades may differ). Each index lists a grade
   // once, at its place in latest, so every level below selects the grades a filter of latest selected, in the same
@@ -1085,8 +1282,19 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   // null cell names none, as records' has-field reads take it.
   const defaultPrior = priors.filter((r) => r.default === true && r.cell == null).at(-1)
   const anyCell = latest.some((k) => k.cells.size > 0)
-  if (anyCell) for (const c of cells) part(c)
+  if (anyCell) for (const c of cells) if (!isCtx(c)) part(c)
   return cells.map((c) => {
+    const own = priors.filter((r) => String(r.cell) === c)
+    const p0 = own.reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
+    const start = (): { alpha: number; beta: number } =>
+      defaultPrior === undefined ? p0 : { alpha: Number(defaultPrior.alpha0), beta: Number(defaultPrior.beta0) }
+    if (isCtx(c)) {
+      const mine = ctxByCell.get(c) ?? []
+      const wins = mine.reduce((s, k) => s + k.r * (k.weights.get(c) ?? 0), 0)
+      const losses = mine.reduce((s, k) => s + (1 - k.r) * (k.weights.get(c) ?? 0), 0)
+      const base = own.length > 0 ? p0 : mine.length === 0 ? start() : p0
+      return { cell: c, alpha: base.alpha + wins, beta: base.beta + losses, from: mine.length > 0 ? "cell" : "none" }
+    }
     const pc = anyCell ? parts.get(c) : undefined
     const levels: Array<[Level, (x: string) => boolean]> = [
       ["cell", (x) => x === c],
@@ -1094,8 +1302,6 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
       ["move", (x) => parts.get(x)!.move === pc!.move],
       ["kind", (x) => parts.get(x)!.kind === pc!.kind],
     ]
-    const own = priors.filter((r) => String(r.cell) === c)
-    const p0 = own.reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
     // Each grade's weight at a level: its largest weight on a cell that level matches.
     const w = (k: Grade, level: Level): number => Math.max(0, ...[...k.weights].filter(([x]) => levels.find(([l]) => l === level)![1](x)).map(([, g]) => g))
     const sum = (ks: Grade[], level: Level) => ({
@@ -1126,8 +1332,6 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
     // a record (most of them mostly failure), so untried moves won nearly every draw. A cell with grades of its own is a
     // move that has run: it inherits as before, and neither its kind's record nor the owner's start reaches it. With no
     // default row the start is 1/1, as before.
-    const start = (): { alpha: number; beta: number } =>
-      defaultPrior === undefined ? p0 : { alpha: Number(defaultPrior.alpha0), beta: Number(defaultPrior.beta0) }
     const base = own.length > 0 ? p0 : coarse === "none" && mine.length === 0 ? start() : { alpha: p0.alpha + got.wins * scale, beta: p0.beta + got.losses * scale }
     const self = sum(mine, "cell")
     return { cell: c, alpha: base.alpha + self.wins, beta: base.beta + self.losses, from: mine.length > 0 ? "cell" : coarse }
