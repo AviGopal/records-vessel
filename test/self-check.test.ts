@@ -314,6 +314,34 @@ describe("what closes a gap: only its composition's expectation moving (construc
       sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r1"), both]
     expect(run(rows).map((g) => g.status)).toEqual(["open"])
   })
+  // A failure owed before a gap opens and due only after it (the offers' posts lagged it), judged against the offer before
+  // the failure: an interval older than the open. s10 is offered at 2/2 and fails; s12 and s14 are offered at 2/3 before
+  // the failure is due, and s14, a repeat of s12 with no act between, opens the gap at 2/3; s16, on another root, is the
+  // first offer the failure is due at.
+  const lagged = (post: Post): Row[] => {
+    const s10 = sel(10, a, cell, { alpha: 2, beta: 2, from: "cell" })
+    return [credits(1), s10, fail(11, s10, { status: 422 }), sel(12, a, cell, { alpha: 2, beta: 3, from: "cell" }, "r1", { posts_seq: 10 }),
+      sel(14, a, cell, { alpha: 2, beta: 3, from: "cell" }, "r1", { posts_seq: 10 }), sel(16, a, cell, post, "r2", { posts_seq: 15 })]
+  }
+  test("[MUST-FAIL] a failure owed before the gap opened, due after it, closes nothing while the expectation is the one it opened on", () => {
+    expect(run(lagged({ alpha: 2, beta: 3, from: "cell" })).map((g) => [g.status, (g.meta as { trigger: string }).trigger])).toEqual([["open", "repeat"]])
+  })
+  test("[GUARD] the same failure closes it once the expectation moved since the open", () => {
+    expect(run(lagged({ alpha: 2, beta: 4, from: "cell" })).map((g) => g.status)).toEqual(["open", "closed"])
+  })
+  test("[GUARD] the expectation a gap opened on is read back from its open row after a restart", () => {
+    const rows = lagged({ alpha: 2, beta: 3, from: "cell" })
+    const opened = run(rows.slice(0, -1))
+    expect(opened.map((g) => g.status)).toEqual(["open"])
+    const stored = { ...opened[0], id: id("gap-stored"), seq: 15, t: T, writer: "records-self", role: "detector", input_refs: [] } as Row
+    const restarted = (last: Row): Array<Record<string, unknown>> => {
+      const chk = checker("records-self")
+      for (const r of [...rows.slice(0, -1), stored]) chk.see(r)
+      return chk.gapsOf(chk.see(last))
+    }
+    expect(restarted(rows.at(-1) as Row)).toEqual([])
+    expect(restarted(lagged({ alpha: 2, beta: 4, from: "cell" }).at(-1) as Row).map((g) => g.status)).toEqual(["closed"])
+  })
   test("[MUST-FAIL] a failure-opened gap closed by a moved repeat names the failure as what opened it", () => {
     const edit = "call/fs_edit"
     const r = sel(10, "produce/request/q", "produce/request/q|gap,asker:detector,age:1", { alpha: 2, beta: 2, from: "cell" })

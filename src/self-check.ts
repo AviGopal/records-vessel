@@ -68,8 +68,8 @@ export const checker = (self?: string) => {
   const owed = new Map<string, Owed[]>()
   const lastChoice = new Map<string, Offer>()
   const acts = new Map<string, Array<{ sel: string; seq: number; k: string }>>()
-  // an open gap, by the trigger that opened it, and the detector's own latest row of it
-  const open = new Map<string, string>()
+  // an open gap, by the trigger that opened it and the expectation it opened on, and the detector's own latest row of it
+  const open = new Map<string, { trigger: string; post?: Post }>()
   const openRow = new Map<string, Row>()
 
   const failedNow = (f: Row): boolean => moveFailedIn(windows)(f) && index.sels.get(String(f.selection_ref))?.writer === f.writer
@@ -163,10 +163,12 @@ export const checker = (self?: string) => {
     const out: Array<Record<string, unknown>> = []
     for (const [k, fs] of by) {
       const stuck = fs.find((f) => f.unmoved)
-      const openedBy = open.get(k)
-      if (stuck !== undefined && openedBy === undefined) out.push(gapRow(k, "open", stuck))
-      const moved = fs.find((f) => f.moved)
-      if (stuck === undefined && moved !== undefined && openedBy !== undefined) out.push(gapRow(k, "closed", moved, openedBy))
+      const opened = open.get(k)
+      if (stuck !== undefined && opened === undefined) out.push(gapRow(k, "open", stuck))
+      // Moved since the gap opened: against the expectation it opened on, not each finding's own before, which can be an
+      // offer older than the open (a failure owed before it, due after it) and so show a move the open already saw.
+      const moved = fs.find((f) => opened?.post !== undefined ? !unmoved(opened.post, f.after.post) : f.moved)
+      if (stuck === undefined && moved !== undefined && opened !== undefined) out.push(gapRow(k, "closed", moved, opened.trigger))
     }
     return out
   }
@@ -177,7 +179,13 @@ export const checker = (self?: string) => {
     if (r.shape === GAP && r.role === DETECTOR && (self === undefined || r.writer === self) && String(r.gap_id ?? "").startsWith(SELF_CHECK)) {
       const k = (r.meta as { composition?: unknown } | undefined)?.composition
       if (typeof k === "string") {
-        if (r.status === "open") { open.set(k, String((r.meta as { trigger?: unknown }).trigger ?? "")); openRow.set(k, r) }
+        if (r.status === "open") {
+          const m = r.meta as { trigger?: unknown; after?: { alpha?: unknown; beta?: unknown; from?: unknown } }
+          const a = m.after
+          const post = typeof a?.alpha === "number" && typeof a.beta === "number" ? { alpha: a.alpha, beta: a.beta, ...(typeof a.from === "string" ? { from: a.from } : {}) } : undefined
+          open.set(k, { trigger: String(m.trigger ?? ""), post })
+          openRow.set(k, r)
+        }
         else { open.delete(k); openRow.delete(k) }
       }
     }
