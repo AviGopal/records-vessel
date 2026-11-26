@@ -238,6 +238,23 @@ describe("what is judged, what is an act, and what a gap row is written for (con
   })
 })
 
+describe("the gap row says where it repeated (constructed)", () => {
+  test("[MUST-FAIL] a repeat offered by a selection that chose another root's option names the option's root, before and after", () => {
+    const a = "call/fs_edit"
+    const post = { alpha: 3, beta: 1, from: "cell" }
+    const c = sel(10, a, `${a}|request,asker:detector,age:1`, post, "r1")
+    // the walk chose a request on r2; the edit on r1 was offered again beside it
+    const s2: Row = { ...sel(20, "produce/request/q", "produce/request/q|gap,asker:detector,age:1", { alpha: 2, beta: 2, from: "cell" }, "r2"),
+      cands: [{ id: "produce/request/q", kind: "produce", root: "r2", ctx: "gap,asker:detector,age:1" }, { id: a, kind: "call", root: "r1", ctx: "request,asker:detector,age:2" }],
+      posts: [{ alpha: 2, beta: 2, from: "cell" }, post] }
+    const chk = checker("records-self")
+    const rows = chk.gapsOf([c, s2].flatMap((r) => chk.see(r)))
+    expect(rows.map((g) => [g.status, (g.meta as { before: { selection: string; root: string }; after: { selection: string; root: string } }).before,
+      (g.meta as { after: { selection: string; root: string } }).after].map((x) => typeof x === "object" ? [x.selection, x.root] : x)))
+      .toEqual([["open", [c.id, "r1"], [s2.id, "r1"]]])
+  })
+})
+
 describe("records writes the gap, as its own detector, once per change", () => {
   const dir = mkdtempSync(join(tmpdir(), "records-self-check-"))
   Object.assign(process.env, {

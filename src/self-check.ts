@@ -192,8 +192,9 @@ const gapRow = (k: string, status: "open" | "closed", f: Finding): Record<string
   input_refs: [f.after.sel, f.before.sel, ...(f.failure_ref !== undefined ? [f.failure_ref] : [])],
   meta: {
     composition: k, trigger: f.trigger,
-    before: { selection: f.before.sel, ...f.before.post, posts_seq: f.before.posts_seq },
-    after: { selection: f.after.sel, ...f.after.post, posts_seq: f.after.posts_seq },
+    // the root the option was offered on, which a selection that chose another root's option does not name
+    before: { selection: f.before.sel, root: f.before.root, ...f.before.post, posts_seq: f.before.posts_seq },
+    after: { selection: f.after.sel, root: f.after.root, ...f.after.post, posts_seq: f.after.posts_seq },
     ...(f.failure_ref !== undefined ? { failure_ref: f.failure_ref, failed_selection: f.failed_selection, owed_as: f.owed_as } : {}),
     ...(f.between !== undefined ? { between: f.between } : {}),
   },
