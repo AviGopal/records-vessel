@@ -274,6 +274,47 @@ describe("the gap row says where it repeated (constructed)", () => {
   })
 })
 
+describe("what closes a gap: only its composition's expectation moving (constructed)", () => {
+  // each row seen in order, with every gap row the detector writes seen back as the store sees it
+  const run = (rows: Row[]): Array<Record<string, unknown>> => {
+    const chk = checker("records-self")
+    const out: Array<Record<string, unknown>> = []
+    let n = 1000
+    for (const r of rows) {
+      for (const g of chk.gapsOf(chk.see(r))) {
+        out.push(g)
+        chk.see({ ...g, id: id(`gap${n}`), seq: n++, t: T, writer: "records-self", role: "detector", input_refs: [] } as Row)
+      }
+    }
+    return out
+  }
+  const a = "produce/activity_template/tmpl01"
+  const cell = `${a}|outcome,asker:detector,age:5`
+  const read = (seq: number): Row => sel(seq, "call/fs_read", "call/fs_read|outcome,asker:detector,age:5", { alpha: 1, beta: 1, from: "cell" })
+  test("[MUST-FAIL] a repeat-opened gap stays open when the walk acted on the root since and the composition is offered again unmoved", () => {
+    const rows = [sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), read(30),
+      sel(40, a, cell, { alpha: 2.5, beta: 2, from: "cell" })]
+    expect(run(rows).map((g) => [g.status, (g.meta as { trigger: string }).trigger])).toEqual([["open", "repeat"]])
+  })
+  test("[MUST-FAIL] a later offer whose expectation took the debit closes it, and the close names the trigger that opened it", () => {
+    const rows = [sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), read(30),
+      sel(40, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), sel(50, a, cell, { alpha: 2.5, beta: 3, from: "cell" })]
+    expect(run(rows).map((g) => [g.status, (g.meta as { trigger: string; opened_by?: string }).opened_by])).toEqual([["open", undefined], ["closed", "repeat"]])
+  })
+  test("[MUST-FAIL] a failure-opened gap closed by a moved repeat names the failure as what opened it", () => {
+    const edit = "call/fs_edit"
+    const r = sel(10, "produce/request/q", "produce/request/q|gap,asker:detector,age:1", { alpha: 2, beta: 2, from: "cell" })
+    const q = made(11, "request", r)
+    const x = sel(12, edit, `${edit}|request,asker:detector,age:1`, { alpha: 3, beta: 1, from: "cell" }, "r1", { from: q.id })
+    const f = fail(13, x, { status: 422 })
+    const rows = [credits(1), r, q, x, f, sel(20, edit, `${edit}|request,asker:detector,age:2`, { alpha: 3, beta: 1, from: "cell" }),
+      sel(30, edit, `${edit}|request,asker:detector,age:3`, { alpha: 3, beta: 2, from: "cell" })]
+    const mine = run(rows).filter((g) => (g.meta as { composition: string }).composition === `${edit}|request,asker:detector`)
+    expect(mine.map((g) => [g.status, (g.meta as { trigger: string }).trigger, (g.meta as { opened_by?: string }).opened_by]))
+      .toEqual([["open", "failure", undefined], ["closed", "repeat", "failure"]])
+  })
+})
+
 describe("records writes the gap, as its own detector, once per change", () => {
   const dir = mkdtempSync(join(tmpdir(), "records-self-check-"))
   Object.assign(process.env, {

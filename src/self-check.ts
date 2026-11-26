@@ -18,7 +18,8 @@ export const SELF_CHECK = "self-check:"
 type Post = { alpha: number; beta: number; from?: string }
 type Offer = { sel: string; seq: number; posts_seq: number; post: Post; root: string }
 type Owed = { failure: string; seq: number; failed_selection: string; owed_as: "own" | "chain"; before?: Offer; row: Row }
-export type Finding = { composition: string; trigger: "failure" | "repeat"; unmoved: boolean; before: Offer; after: Offer; failure_ref?: string; failed_selection?: string; owed_as?: string; between?: string[] }
+// unmoved opens a gap; moved (the expectation itself moved, whatever was done between) is all that closes one
+export type Finding = { composition: string; trigger: "failure" | "repeat"; unmoved: boolean; moved: boolean; before: Offer; after: Offer; failure_ref?: string; failed_selection?: string; owed_as?: string; between?: string[] }
 
 // A composition is a move in what it reads, asked by whom: its cell without the root's age, which only says how long the
 // root has waited.
@@ -67,7 +68,8 @@ export const checker = (self?: string) => {
   const owed = new Map<string, Owed[]>()
   const lastChoice = new Map<string, Offer>()
   const acts = new Map<string, Array<{ sel: string; seq: number; k: string }>>()
-  const open = new Map<string, boolean>()
+  // an open gap, by the trigger that opened it
+  const open = new Map<string, string>()
 
   const failedNow = (f: Row): boolean => moveFailedIn(windows)(f) && index.sels.get(String(f.selection_ref))?.writer === f.writer
   const refail = (): void => { index.failed = new Set(walkFailures.filter(failedNow).map((f) => String(f.selection_ref))) }
@@ -125,13 +127,13 @@ export const checker = (self?: string) => {
       if (due.length > 0) owed.set(k, pending.filter((p) => o.posts_seq < p.seq))
       for (const p of due) {
         if (p.before === undefined || !moveFailedIn(windows)(p.row)) continue
-        out.push({ composition: k, trigger: "failure", unmoved: unmoved(p.before.post, o.post), before: p.before, after, failure_ref: p.failure, failed_selection: p.failed_selection, owed_as: p.owed_as })
+        out.push({ composition: k, trigger: "failure", unmoved: unmoved(p.before.post, o.post), moved: !unmoved(p.before.post, o.post), before: p.before, after, failure_ref: p.failure, failed_selection: p.failed_selection, owed_as: p.owed_as })
       }
       const c = lastChoice.get(`${o.root}|${k}`)
       if (c !== undefined) {
         const between = (acts.get(o.root) ?? []).filter((x) => x.seq > c.seq && x.seq < o.seq)
         const tried = between.some((x) => x.k !== k && !anyFailure.has(x.sel))
-        out.push({ composition: k, trigger: "repeat", unmoved: !tried && unmoved(c.post, o.post), before: c, after, between: between.map((x) => x.sel) })
+        out.push({ composition: k, trigger: "repeat", unmoved: !tried && unmoved(c.post, o.post), moved: !unmoved(c.post, o.post), before: c, after, between: between.map((x) => x.sel) })
       }
     }
     for (const o of offers) {
@@ -150,17 +152,20 @@ export const checker = (self?: string) => {
     return out
   }
 
-  // A gap per composition: opened by an unmoved finding, closed by a later moved one with none unmoved beside it. Only
-  // a change of state is written, so an open gap is not re-keyed on every repeat.
+  // A gap per composition: opened by an unmoved finding, closed only when a later offer shows its expectation moved, with
+  // none unmoved beside it. An act between choices keeps a repeat from opening a gap but closes none: a gap the walk
+  // answered by doing something else on the root stays open until the composition's own expectation moves. Only a
+  // change of state is written, so an open gap is not re-keyed on every repeat.
   const gapsOf = (found: Finding[]): Array<Record<string, unknown>> => {
     const by = new Map<string, Finding[]>()
     for (const f of found) by.set(f.composition, [...(by.get(f.composition) ?? []), f])
     const out: Array<Record<string, unknown>> = []
     for (const [k, fs] of by) {
       const stuck = fs.find((f) => f.unmoved)
-      const isOpen = open.get(k) === true
-      if (stuck !== undefined && !isOpen) out.push(gapRow(k, "open", stuck))
-      if (stuck === undefined && isOpen) out.push(gapRow(k, "closed", fs[0]!))
+      const openedBy = open.get(k)
+      if (stuck !== undefined && openedBy === undefined) out.push(gapRow(k, "open", stuck))
+      const moved = fs.find((f) => f.moved)
+      if (stuck === undefined && moved !== undefined && openedBy !== undefined) out.push(gapRow(k, "closed", moved, openedBy))
     }
     return out
   }
@@ -170,7 +175,10 @@ export const checker = (self?: string) => {
     if (r.shape === FAILURE && r.role === WALK) owe(r)
     if (r.shape === GAP && r.role === DETECTOR && (self === undefined || r.writer === self) && String(r.gap_id ?? "").startsWith(SELF_CHECK)) {
       const k = (r.meta as { composition?: unknown } | undefined)?.composition
-      if (typeof k === "string") open.set(k, r.status === "open")
+      if (typeof k === "string") {
+        if (r.status === "open") open.set(k, String((r.meta as { trigger?: unknown }).trigger ?? ""))
+        else open.delete(k)
+      }
     }
     if (r.shape === SELECTION && r.role === WALK && String(r.arm) === TREATED) return judge(r)
     return []
@@ -181,7 +189,7 @@ export const checker = (self?: string) => {
 
 export const gapIdOf = (composition: string): string => `${SELF_CHECK}${createHash("sha256").update(composition).digest("hex").slice(0, 16)}`
 
-const gapRow = (k: string, status: "open" | "closed", f: Finding): Record<string, unknown> => ({
+const gapRow = (k: string, status: "open" | "closed", f: Finding, openedBy?: string): Record<string, unknown> => ({
   shape: GAP,
   gap_id: gapIdOf(k),
   status,
@@ -192,6 +200,8 @@ const gapRow = (k: string, status: "open" | "closed", f: Finding): Record<string
   input_refs: [f.after.sel, f.before.sel, ...(f.failure_ref !== undefined ? [f.failure_ref] : [])],
   meta: {
     composition: k, trigger: f.trigger,
+    // a close is judged by a later finding, whose trigger may not be the one that opened the gap
+    ...(openedBy !== undefined ? { opened_by: openedBy } : {}),
     // the root the option was offered on, which a selection that chose another root's option does not name
     before: { selection: f.before.sel, root: f.before.root, ...f.before.post, posts_seq: f.before.posts_seq },
     after: { selection: f.after.sel, root: f.after.root, ...f.after.post, posts_seq: f.after.posts_seq },
