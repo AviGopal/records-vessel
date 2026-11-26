@@ -253,6 +253,25 @@ describe("the gap row says where it repeated (constructed)", () => {
       (g.meta as { after: { selection: string; root: string } }).after].map((x) => typeof x === "object" ? [x.selection, x.root] : x)))
       .toEqual([["open", [c.id, "r1"], [s2.id, "r1"]]])
   })
+  test("[GUARD] a failure owed to a composition last offered unchosen on another root names that root before, and the judging offer's after", () => {
+    const q = "produce/request/q"
+    const r = sel(10, q, `${q}|gap,asker:detector,age:1`, { alpha: 2, beta: 2, from: "cell" }, "r1")
+    const req = made(11, "request", r)
+    // a read chosen on r3 offers the request again, unchosen, on r2: its last offer before the failure
+    const y: Row = { ...sel(12, "call/fs_read", "call/fs_read|request,asker:detector,age:1", { alpha: 1, beta: 1, from: "cell" }, "r3"),
+      cands: [{ id: "call/fs_read", kind: "call", root: "r3", ctx: "request,asker:detector,age:1" }, { id: q, kind: "produce", root: "r2", ctx: "gap,asker:detector,age:1" }],
+      posts: [{ alpha: 1, beta: 1, from: "cell" }, { alpha: 2, beta: 2, from: "cell" }] }
+    const x = sel(13, "call/fs_edit", "call/fs_edit|request,asker:detector,age:1", { alpha: 3, beta: 1, from: "cell" }, "r1", { from: req.id })
+    const f = fail(14, x, { status: 422 })
+    const s2: Row = { ...sel(20, "call/fs_edit", "call/fs_edit|request,asker:detector,age:2", { alpha: 3, beta: 1, from: "cell" }, "r1"),
+      cands: [{ id: "call/fs_edit", kind: "call", root: "r1", ctx: "request,asker:detector,age:2" }, { id: q, kind: "produce", root: "r1", ctx: "gap,asker:detector,age:2" }],
+      posts: [{ alpha: 3, beta: 1, from: "cell" }, { alpha: 2, beta: 2, from: "cell" }], posts_seq: 19 }
+    const chk = checker("records-self")
+    const rows = chk.gapsOf([credits(1), r, req, y, x, f, s2].flatMap((row) => chk.see(row)))
+    const g = rows.find((row) => (row.meta as { composition: string }).composition === `${q}|gap,asker:detector`)
+    const m = g?.meta as { trigger: string; before: { selection: string; root: string }; after: { selection: string; root: string } } | undefined
+    expect([m?.trigger, m?.before.selection, m?.before.root, m?.after.selection, m?.after.root]).toEqual(["failure", y.id, "r2", s2.id, "r1"])
+  })
 })
 
 describe("records writes the gap, as its own detector, once per change", () => {
