@@ -132,7 +132,7 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   return { status: 200, body: row }
 }
 
-export const read = (q: Query): Row[] => {
+export const read = (q: Query, prefilter?: (r: Row) => boolean): Row[] => {
   let out = rows
   if (q.shape !== undefined) {
     const s = String(q.shape)
@@ -146,6 +146,7 @@ export const read = (q: Query): Row[] => {
     const n = Number(q.after_seq)
     out = out.filter((r) => r.seq > n)
   }
+  if (prefilter !== undefined) out = out.filter(prefilter)
   // The latest row of each value of a field (a gap's gap_id): what each one stands at now. Kept before where, so a thing
   // whose latest row no longer matches (a gap closed since) shows nothing, not an older row that once matched.
   if (q.latest_by !== undefined) {
@@ -1011,11 +1012,16 @@ export const serveRead = (q: Query): Row[] | Call[] | ReturnType<typeof episodes
     const states = openAskStates().filter((r) => Object.entries(q.where ?? {}).every(([k, v]) => holds(r[k], v)))
     return q.limit === undefined ? states : states.slice(-q.limit)
   }
-  let matched = read(q)
-  if (q.stored !== true && matched.some((r) => (r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED)) {
+  let prefilter: ((r: Row) => boolean) | undefined
+  if (
+    q.stored !== true &&
+    (q.shape === undefined || q.shape === SHAPE_SCHEMA || q.shape === SHAPE_DESCRIPTION) &&
+    rows.some((r) => (r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED)
+  ) {
     const { done, byId } = verifiedClosedEpisodes()
-    matched = matched.filter((r) => !((r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED) || isEarnedDescriptor(r, done, byId))
+    prefilter = (r) => !((r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED) || isEarnedDescriptor(r, done, byId)
   }
+  const matched = read(q, prefilter)
   const kept = q.limit === undefined ? matched : matched.slice(-q.limit)
   return withStanding(q.stored === true ? kept : withUse(factsOn(kept)))
 }

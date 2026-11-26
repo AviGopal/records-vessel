@@ -63,7 +63,7 @@ const shapeOf = (e: unknown): string => typeof e === "object" && e !== null ? St
 // ends.
 // The rows reached() walks, indexed once per fold, not once per grade: what is by id, which rows are selections, what
 // each selection produced, and each target's schema input shapes.
-export type Index = { byId: Map<string, Row>; sels: Map<string, Row>; made: Map<string, Row[]>; inputs: Map<string, Set<string>>; failed: Set<string> }
+export type Index = { byId: Map<string, Row>; sels: Map<string, Row>; made: Map<string, Row[]>; inputs: Map<string, Set<string>>; failed: Set<string>; childTemplates: Map<string, string[]> }
 export const indexOf = (seen: Row[]): Index => {
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
@@ -79,7 +79,15 @@ export const indexOf = (seen: Row[]): Index => {
     const k = String(s.target)
     inputs.set(k, new Set([...(inputs.get(k) ?? []), ...[s.inputs ?? []].flat().map(shapeOf)]))
   }
-  return { byId, sels, made, inputs, failed: failedOf(seen, sels) }
+  const childTemplates = new Map<string, string[]>()
+  for (const h of seen.filter((x) => x.shape === HOP && x.role === WALK && x.phase === "ended" && typeof x.template_ref === "string").sort((a, b) => a.seq - b.seq)) {
+    const sid = String(h.selection_ref)
+    const tid = h.template_ref as string
+    const list = childTemplates.get(sid)
+    if (list === undefined) childTemplates.set(sid, [tid])
+    else if (!list.includes(tid)) list.push(tid)
+  }
+  return { byId, sels, made, inputs, failed: failedOf(seen, sels), childTemplates }
 }
 
 // WAITING ON A PERSON, one reading for every rule that asks it (a lapse, a derived lapse, a broken promise): at seq
@@ -170,20 +178,10 @@ const indexAt = (all: Row[], atSeq: number): Index => {
 }
 // The rows a selection consumed (the rule above reached): one reading for reached() and the use grade.
 const consumedOf = (index: Index): ((sel: Row) => string[]) => {
-  const { byId, sels, made, inputs, failed } = index
+  const { byId, sels, made, inputs, failed, childTemplates } = index
   const okRun = (sid: unknown): Row | undefined => {
     const s = sels.get(String(sid))
     return s !== undefined && String(s.a ?? "").startsWith("run/") && !failed.has(s.id) ? s : undefined
-  }
-  // Nested child sub-template calls executed inside a non-failed run selection (hops carrying template_ref).
-  const childTemplates = new Map<string, string[]>()
-  for (const h of byId.values()) {
-    if (h.shape !== HOP || h.role !== WALK || h.phase !== "ended" || typeof h.template_ref !== "string") continue
-    const sid = String(h.selection_ref)
-    if (failed.has(sid)) continue
-    const list = childTemplates.get(sid)
-    if (list === undefined) childTemplates.set(sid, [h.template_ref])
-    else if (!list.includes(h.template_ref)) list.push(h.template_ref)
   }
   return (sel: Row): string[] => {
     const a = String(sel.a ?? "")
@@ -198,7 +196,7 @@ const consumedOf = (index: Index): ((sel: Row) => string[]) => {
     }
     if (a.startsWith("run/")) {
       const parentId = a.slice("run/".length)
-      const children = childTemplates.get(sel.id)
+      const children = failed.has(sel.id) ? undefined : childTemplates.get(sel.id)
       return children === undefined ? [parentId] : [...new Set([parentId, ...children])]
     }
     return (made.get(sel.id) ?? []).flatMap((p) => {
@@ -720,11 +718,26 @@ const closureCredits = (
   }
   return weights
 }
+// Test-verdict closures (concept_VcYgxGWWysKn): a test passing is a gate verdict, not an operational consequence, so
+// detector gap closures caused by test-suite verdicts earn no credit; owner credits { target: "gap" } may override
+// test_reasons and test_categories per Law 1.
+const DEFAULT_TEST_REASONS = ["named_tests_pass", "named_tests_absent", "suite_passes_again", "testgate_budget_recovered"]
+const DEFAULT_TEST_CATEGORIES = ["failing_test", "typecheck_error"]
+const testVerdictOf = (rule: Row | undefined): { reasons: Set<string>; categories: Set<string> } => ({
+  reasons: new Set(Array.isArray(rule?.test_reasons) ? rule.test_reasons.filter((x): x is string => typeof x === "string") : DEFAULT_TEST_REASONS),
+  categories: new Set(Array.isArray(rule?.test_categories) ? rule.test_categories.filter((x): x is string => typeof x === "string") : DEFAULT_TEST_CATEGORIES),
+})
+const isTestVerdictClose = (closeRow: Row, episodeOpenRows: Row[], reasons: Set<string>, categories: Set<string>): boolean =>
+  (typeof closeRow.closed_reason === "string" && reasons.has(closeRow.closed_reason)) ||
+  (typeof closeRow.category === "string" && categories.has(closeRow.category)) ||
+  episodeOpenRows.some((r) => typeof r.category === "string" && categories.has(r.category))
+
 export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const seen = all.filter((r) => r.seq <= atSeq)
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
   const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
   if (by === undefined) return []
+  const { reasons: testReasons, categories: testCategories } = testVerdictOf(rule)
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED)
   const selsById = new Map(sels.map((r) => [r.id, r]))
@@ -745,22 +758,32 @@ export const gapClosuresScan = (all: Row[], asOf: number, atSeq: number): Grade[
   for (const rows of byGap.values()) {
     let since = 0
     let open: string[] = []
+    let openRows: Row[] = []
     for (const c of rows) {
-      if (c.status === "open") { open.push(c.id); if (closerRed(c)) since = c.seq; continue }
+      if (c.status === "open") { open.push(c.id); openRows.push(c); if (closerRed(c)) since = c.seq; continue }
       if (open.length > 0 && c.seq <= asOf) {
-        const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
-        const chain = sels.filter((s) => s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id))
-        const ids = new Set(chain.map((s) => s.id))
-        const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
-        const weights = landed ? closureCredits(byId, selsById, failed, endedChildHops, chain, since, c.seq, t) : new Map<string, number>()
-        out.push({
-          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(weights.keys()),
-          weights,
-          by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
-        })
+        if (isTestVerdictClose(c, openRows, testReasons, testCategories)) {
+          out.push({
+            id: c.id, ok: false, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(),
+            weights: new Map(), by: DETECTOR, deadline: false, refused: "test_verdict",
+          })
+        } else {
+          const openIds = new Set(open)
+          const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => openIds.has(id))
+          const chain = sels.filter((s) => s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id))
+          const ids = new Set(chain.map((s) => s.id))
+          const landed = ended.some((e) => e.seq < c.seq && ids.has(String(started.get(String(e.call_id))?.selection_ref)))
+          const weights = landed ? closureCredits(byId, selsById, failed, endedChildHops, chain, since, c.seq, t) : new Map<string, number>()
+          out.push({
+            id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(weights.keys()),
+            weights,
+            by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
+          })
+        }
       }
       since = c.seq
       open = []
+      openRows = []
     }
   }
   return out
@@ -782,6 +805,7 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   const rule = seen.filter((r) => r.shape === CREDITS && r.role === OWNER && String(r.target) === GAP).sort((a, b) => a.seq - b.seq).at(-1)
   const by = typeof rule?.by_call === "string" && rule.by_call !== "" ? rule.by_call : undefined
   if (by === undefined) return []
+  const { reasons: testReasons, categories: testCategories } = testVerdictOf(rule)
   const byId = new Map(seen.map((r) => [r.id, r]))
   const sels = new Map(seen.filter((r) => r.shape === SELECTION && String(r.arm) === TREATED).map((r) => [r.id, r]))
   const failed = new Set(seen
@@ -801,22 +825,32 @@ const gapClosuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
   for (const rows of byGap.values()) {
     let since = 0
     let open: string[] = []
+    let openRows: Row[] = []
     for (const c of rows) {
-      if (c.status === "open") { open.push(c.id); if (closerRed(c)) since = c.seq; continue }
+      if (c.status === "open") { open.push(c.id); openRows.push(c); if (closerRed(c)) since = c.seq; continue }
       if (open.length > 0 && c.seq <= asOf) {
-        const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => open.includes(id))
-        const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
-        const landed = ended.some((e) => e.seq < c.seq && inChain(sels.get(String(started.get(String(e.call_id))?.selection_ref))))
-        const chain = landed ? gather([...sels.values()], inChain) : []
-        const weights = landed ? closureCredits(byId, sels, failed, endedChildHops, chain, since, c.seq, t) : new Map<string, number>()
-        out.push({
-          id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(weights.keys()),
-          weights,
-          by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
-        })
+        if (isTestVerdictClose(c, openRows, testReasons, testCategories)) {
+          out.push({
+            id: c.id, ok: false, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(),
+            weights: new Map(), by: DETECTOR, deadline: false, refused: "test_verdict",
+          })
+        } else {
+          const openIds = new Set(open)
+          const held = (s: Row) => [s.pool_refs, s.input_refs].flat().map(String).some((id) => openIds.has(id))
+          const inChain = (s: Row | undefined): s is Row => s !== undefined && s.seq > since && s.seq < c.seq && held(s) && !failed.has(s.id)
+          const landed = ended.some((e) => e.seq < c.seq && inChain(sels.get(String(started.get(String(e.call_id))?.selection_ref))))
+          const chain = landed ? gather([...sels.values()], inChain) : []
+          const weights = landed ? closureCredits(byId, sels, failed, endedChildHops, chain, since, c.seq, t) : new Map<string, number>()
+          out.push({
+            id: c.id, ok: landed, r: 1, judged: c.id, key: `gap|${c.id}`, cells: new Set(weights.keys()),
+            weights,
+            by: DETECTOR, deadline: false, ...(landed ? {} : { refused: "no_change" }),
+          })
+        }
       }
       since = c.seq
       open = []
+      openRows = []
     }
   }
   return out

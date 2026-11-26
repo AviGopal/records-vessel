@@ -10,7 +10,7 @@
 // functions over an index kept the way indexOf builds it.
 import { createHash } from "node:crypto"
 import { indexOf, infraWindowsOf, moveFailedIn, reached, templateOwnStats, travelOf, type Index, type InfraWindow, type Travel } from "./fold"
-import { ACTIVITY_TEMPLATE, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, INFRA_WINDOW, OUTCOME, OWNER, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
+import { ACTIVITY_TEMPLATE, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, INFRA_WINDOW, OUTCOME, OWNER, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
 
 export const SELF_CHECK = "self-check:"
@@ -57,7 +57,7 @@ const offersOf = (s: Row): Array<Offer & { cell: string; chosen: boolean }> => {
 // writer's row under the same gap ids cannot silence it.
 export const checker = (self?: string) => {
   // The fold's index, kept as indexOf builds it (its parity is a leg).
-  const index: Index = { byId: new Map(), sels: new Map(), made: new Map(), inputs: new Map(), failed: new Set() }
+  const index: Index = { byId: new Map(), sels: new Map(), made: new Map(), inputs: new Map(), failed: new Set(), childTemplates: new Map() }
   const windowRows: Row[] = []
   let windows: InfraWindow[] = []
   const creditRows: Row[] = []
@@ -92,6 +92,12 @@ export const checker = (self?: string) => {
     if (r.shape === FAILURE && r.role === WALK) {
       anyFailure.add(String(r.selection_ref))
       if (r.kind !== "skip") { walkFailures.push(r); if (failedNow(r)) index.failed.add(String(r.selection_ref)) }
+    }
+    if (r.shape === HOP && r.role === WALK && r.phase === "ended" && typeof r.template_ref === "string") {
+      const sid = String(r.selection_ref)
+      const list = index.childTemplates.get(sid)
+      if (list === undefined) index.childTemplates.set(sid, [r.template_ref])
+      else if (!list.includes(r.template_ref)) list.push(r.template_ref)
     }
   }
 
