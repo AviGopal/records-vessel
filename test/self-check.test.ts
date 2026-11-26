@@ -192,6 +192,52 @@ describe("a failure: owed to its own composition and up the chain (constructed)"
   })
 })
 
+describe("what is judged, what is an act, and what a gap row is written for (constructed)", () => {
+  const a = "produce/activity_template/tmpl01"
+  const cell = `${a}|outcome,asker:detector,age:5`
+  test("[GUARD] a moved finding on a composition never opened writes no row", () => {
+    const chk = checker("records-self")
+    const found = [sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" }), sel(20, a, cell, { alpha: 2.5, beta: 3, from: "cell" })].flatMap((r) => chk.see(r))
+    expect(found.map((f) => [f.trigger, f.unmoved])).toEqual([["repeat", false]])
+    expect(chk.gapsOf(found)).toEqual([])
+  })
+  test("[GUARD] a template run between two choices is an act: no repeat", () => {
+    const c = sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" })
+    const run = sel(15, "run/tmpl02", "run/tmpl02|request,asker:detector,age:5", { alpha: 2, beta: 1, from: "cell" })
+    const s2 = sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" })
+    expect(unmovedOf([c, run, s2])).toEqual([])
+    expect(unmovedOf([c, s2]).map((f) => f.trigger)).toEqual(["repeat"])
+  })
+  test("[GUARD] only the treated arm's selections are judged: the same choices in another arm file nothing", () => {
+    const c = sel(10, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r1", { arm: "control" })
+    const s2 = sel(20, a, cell, { alpha: 2.5, beta: 2, from: "cell" }, "r1", { arm: "control" })
+    expect(selfCheck([c, s2])).toEqual([])
+    expect(unmovedOf([{ ...c, arm: "treated" }, { ...s2, arm: "treated" }]).map((f) => f.trigger)).toEqual(["repeat"])
+  })
+  test("[GUARD] an option offered on two roots is chosen on the selection's own root", () => {
+    const post = { alpha: 2.5, beta: 2, from: "cell" }
+    const c: Row = { ...sel(10, a, cell, post, "r1"),
+      cands: [{ id: a, kind: "produce", root: "r2", ctx: "outcome,asker:detector,age:5" }, { id: a, kind: "produce", root: "r1", ctx: "outcome,asker:detector,age:5" }],
+      posts: [post, post] }
+    const s2 = sel(20, a, cell, post, "r1")
+    const repeats = selfCheck([c, s2]).filter((f) => f.trigger === "repeat")
+    expect(repeats.map((f) => [f.before.sel, f.before.root, f.after.root, f.unmoved])).toEqual([[c.id, "r1", "r1", true]])
+  })
+  test("[GUARD] a failure judged at an offer leaves a later one pending for the offer that reads it", () => {
+    const xc = "call/fs_edit|request,asker:detector,age:1"
+    const x = sel(10, "call/fs_edit", xc, { alpha: 3, beta: 1, from: "cell" })
+    const f1 = fail(11, x, { status: 422 })
+    // a second edit offered with posteriors read before the first failure, so it judges nothing, and failing in turn
+    const x2 = sel(12, "call/fs_edit", xc, { alpha: 3, beta: 1, from: "cell" }, "r1", { posts_seq: 10 })
+    const f2 = fail(13, x2, { status: 422 })
+    // read at the first failure only: it judges that one, and the second is still owed
+    const s = sel(14, "call/fs_edit", xc, { alpha: 3, beta: 1, from: "cell" }, "r1", { posts_seq: 11 })
+    const s3 = sel(20, "call/fs_edit", xc, { alpha: 3, beta: 1, from: "cell" })
+    const judged = selfCheck([x, f1, x2, f2, s, s3]).filter((g) => g.trigger === "failure").map((g) => [g.failure_ref, g.after.sel])
+    expect(judged).toEqual([[f1.id, s.id], [f2.id, s3.id]])
+  })
+})
+
 describe("records writes the gap, as its own detector, once per change", () => {
   const dir = mkdtempSync(join(tmpdir(), "records-self-check-"))
   Object.assign(process.env, {
