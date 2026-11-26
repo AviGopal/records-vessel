@@ -225,9 +225,11 @@ const openGaps = (from: Row[]): Row[] => {
   // test is fixed by a reviewed commit to the vessel, and the detector closes the gap once it passes. A later r 1
   // clears the mark, and the gap is a root again.
   const notRunnable = (r: Row): boolean => r.check_runnable === false || (r.meta as { check_runnable?: unknown } | undefined)?.check_runnable === false
-  // A gap its detector says no change here could fix (walkable false: what failed is a vessel the walk calls, an outage
-  // or a timeout) is shown, not worked: not a root, and so never a producer's work or debit (the USER: infra gaps are
-  // gaps, marked, not offered to the walk). Read from the detector's own field, never from what kind of gap it is.
+  // A gap its detector says walking could not work (walkable false: what failed is a vessel the walk calls, an outage or
+  // a timeout, which no change here could fix; or a self-check gap, evidence that a composition's expectation did not
+  // move, which walking produced no work for) is shown, not worked: not a root, and so never a producer's work or debit
+  // (the USER: infra gaps are gaps, marked, not offered to the walk). Read from the detector's own field, never from what
+  // kind of gap it is.
   const notWalkable = (r: Row): boolean => r.walkable === false
   return [...latest.values()].filter((r) => r.status === "open" && !held(r) && !notRunnable(r) && !notWalkable(r))
 }
