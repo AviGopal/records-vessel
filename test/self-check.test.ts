@@ -5,7 +5,7 @@
 // and a field the case does not turn on is filled where noted.
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { compositionOf, gapIdOf, parityOf, selfCheck, unmoved } from "../src/self-check"
@@ -191,5 +191,32 @@ describe("records writes the gap, as its own detector, once per change", () => {
     expect(gaps().length).toBe(1)
     put(3)
     expect(gaps().map((g) => g.status)).toEqual(["open", "closed"])
+  })
+
+  // Each start is its own process, as a restart is: the store reads its rows once, when its module loads.
+  const restarted = (data: string, betas: number[]): Array<[unknown, unknown]> => {
+    const script = join(data, "start.ts")
+    writeFileSync(script, `
+      const store = await import(${JSON.stringify(join(import.meta.dir, "../src/store"))})
+      const a = "produce/activity_template/tmpl01"
+      for (const beta of ${JSON.stringify(betas)}) store.write({ shape: "selection", arm: "treated", root: "r9", a, cell: a + "|outcome,asker:detector,age:5",
+        cands: [{ id: a, kind: "produce", root: "r9", ctx: "outcome,asker:detector,age:5" }], posts: [{ alpha: 2.5, beta, from: "cell" }], posts_seq: store.lastSeq() }, "walk-test", "walk")
+      console.log(JSON.stringify(store.read({ shape: "gap" }).map((g) => [g.gap_id, g.status])))
+    `)
+    const r = Bun.spawnSync([process.execPath, script], { env: { ...process.env, RECORDS_DATA_DIR: join(data, "store") } })
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString())
+    return JSON.parse(r.stdout.toString().trim().split("\n").at(-1) ?? "[]")
+  }
+  test("[MUST-FAIL] after a restart, a repeat of a choice made before it files, and a gap opened before it is not opened again", () => {
+    const data = mkdtempSync(join(tmpdir(), "records-self-check-restart-"))
+    try {
+      const id = gapIdOf(compositionOf("produce/activity_template/tmpl01|outcome,asker:detector,age:5"))
+      expect(restarted(data, [2])).toEqual([])
+      expect(restarted(data, [2])).toEqual([[id, "open"]])
+      expect(restarted(data, [2])).toEqual([[id, "open"]])
+      expect(restarted(data, [3])).toEqual([[id, "open"], [id, "closed"]])
+    } finally {
+      rmSync(data, { recursive: true, force: true })
+    }
   })
 })
