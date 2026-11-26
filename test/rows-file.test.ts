@@ -21,3 +21,17 @@ test("[MUST-FAIL] a line or a character split across chunks is read whole, a las
   // a line that is not a row still stops the read, as it did read whole
   await expect(rowsIn(chunksOf(new TextEncoder().encode('{"id":"a"}\n{"id":'), 3))).rejects.toThrow()
 })
+
+test("[MUST-FAIL] what a read leaves behind is collected as it goes, once per bound of bytes read, and the rows are unchanged", async () => {
+  const text = Array.from({ length: 50 }, (_, i) => JSON.stringify(row(i + 1, { note: "é".repeat(i % 5) }))).join("\n") + "\n"
+  const bytes = new TextEncoder().encode(text)
+  let n = 0
+  expect(await rowsIn(chunksOf(bytes, 5), () => { n++ }, 100)).toEqual(whole(text))
+  // 5-byte chunks reach exactly 100 bytes at every 20th chunk, so a collection follows each 20th, none in between
+  expect(bytes.length).toBeGreaterThan(20 * 5 * 10)
+  expect(n).toBe(Math.floor(Math.ceil(bytes.length / 5) / 20))
+  // by default the bound is large: a small read collects nothing
+  let none = 0
+  expect(await rowsIn(chunksOf(bytes, 7), () => { none++ })).toEqual(whole(text))
+  expect(none).toBe(0)
+})
