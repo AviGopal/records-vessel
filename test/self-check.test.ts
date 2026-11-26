@@ -8,7 +8,7 @@ import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { compositionOf, gapIdOf, parityOf, selfCheck, unmoved } from "../src/self-check"
+import { checker, compositionOf, gapIdOf, parityOf, selfCheck, unmoved } from "../src/self-check"
 import type { Row } from "../src/store"
 
 const W = "walk-a"
@@ -94,6 +94,28 @@ describe("a repeat: offered again on its root with no act since its last choice 
     const s2 = sel(158598, a, `${a}|attempt_explanation,gap,asker:detector,age:7`, { alpha: 1.346, beta: 7.654, from: "cell" })
     expect(selfCheck([c, s2]).map((f) => [f.trigger, f.unmoved])).toEqual([["repeat", false]])
   })
+  test("[MUST-FAIL] only the walk's own selections are judged: the same choices written under another role file nothing", () => {
+    const a = "produce/activity_template/tmpl01"
+    const c = sel(10, a, `${a}|outcome,asker:detector,age:5`, { alpha: 2.5, beta: 2, from: "cell" }, "r1", { role: "described" })
+    const s2 = sel(20, a, `${a}|outcome,asker:detector,age:5`, { alpha: 2.5, beta: 2, from: "cell" }, "r1", { role: "described" })
+    expect(selfCheck([c, s2])).toEqual([])
+    expect(unmovedOf([{ ...c, role: "walk" }, { ...s2, role: "walk" }]).map((f) => f.trigger)).toEqual(["repeat"])
+  })
+  test("[MUST-FAIL] an open gap read from another writer's row does not keep the detector from opening its own", () => {
+    const a = "produce/activity_template/tmpl01"
+    const k = compositionOf(`${a}|outcome,asker:detector,age:5`)
+    const c = sel(10, a, `${a}|outcome,asker:detector,age:5`, { alpha: 2.5, beta: 2, from: "cell" })
+    const s2 = sel(20, a, `${a}|outcome,asker:detector,age:5`, { alpha: 2.5, beta: 2, from: "cell" })
+    const held = (writer: string) => ({ shape: "gap", id: id(`gap-${writer}`), seq: 15, t: T, writer, role: "detector", input_refs: [],
+      gap_id: gapIdOf(k), status: "open", meta: { composition: k } }) as Row
+    const opened = (writer: string) => {
+      const chk = checker("records-self")
+      const found = [c, held(writer), s2].flatMap((r) => chk.see(r))
+      return chk.gapsOf(found).map((g) => g.status)
+    }
+    expect(opened("someone-else")).toEqual(["open"])
+    expect(opened("records-self")).toEqual([])
+  })
   test("[MUST-FAIL] a repeat is per root: the same composition chosen on another root is not its last choice", () => {
     const a = "produce/activity_template/tmpl01"
     const c = sel(10, a, `${a}|outcome,asker:detector,age:5`, { alpha: 2.5, beta: 2, from: "cell" }, "r2")
@@ -135,6 +157,11 @@ describe("a failure: owed to its own composition and up the chain (constructed)"
   test("[MUST-FAIL] a skip, or a failure inside the owner's infra window of its status, is owed to no one", () => {
     expect(unmovedOf(build({ kind: "skip" }).rows).filter((g) => g.trigger === "failure")).toEqual([])
     expect(unmovedOf(build({ window: true }).rows).filter((g) => g.trigger === "failure")).toEqual([])
+  })
+  test("[MUST-FAIL] a failure written by a writer other than its selection's is not the move's, and is owed to no one", () => {
+    const { rows, f } = build()
+    const other = rows.map((r) => (r.id === f.id ? { ...r, writer: "walk-b" } : r))
+    expect(unmovedOf(other).filter((g) => g.trigger === "failure")).toEqual([])
   })
   test("[MUST-FAIL] an offer whose posteriors were read before the failure does not judge it; one read at it does", () => {
     const early = build({ seqOfNext: 14 })
@@ -186,11 +213,29 @@ describe("records writes the gap, as its own detector, once per change", () => {
     put(2)
     expect(gaps()).toEqual([])
     put(2)
-    expect(gaps().map((g) => [g.status, g.role, g.writer])).toEqual([["open", "detector", "records-test"]])
+    // the writer is records' own id, whichever file of the run loaded the store (and so its config) first
+    const { VESSEL_ID } = await import("../src/config")
+    expect(VESSEL_ID).not.toBe("")
+    expect(gaps().map((g) => [g.status, g.role, g.writer])).toEqual([["open", "detector", VESSEL_ID]])
     put(2)
     expect(gaps().length).toBe(1)
     put(3)
     expect(gaps().map((g) => g.status)).toEqual(["open", "closed"])
+  })
+
+  test("[MUST-FAIL] the store's detector holds open only what records itself wrote: another writer's open row does not silence it", async () => {
+    const store = await import("../src/store")
+    const { VESSEL_ID } = await import("../src/config")
+    const a = "produce/activity_template/tmpl02"
+    const cell = `${a}|outcome,asker:detector,age:5`
+    const k = compositionOf(cell)
+    store.write({ shape: "gap", gap_id: gapIdOf(k), status: "open", category: "self_check", meta: { composition: k } }, "someone-else", "detector")
+    const put = () => store.write({ shape: "selection", arm: "treated", root: "r8", a, cell, cands: [{ id: a, kind: "produce", root: "r8", ctx: "outcome,asker:detector,age:5" }],
+      posts: [{ alpha: 2.5, beta: 2, from: "cell" }], posts_seq: store.lastSeq() }, W, "walk")
+    put()
+    put()
+    expect(store.read({ shape: "gap" }).filter((g) => g.gap_id === gapIdOf(k)).map((g) => [g.writer, g.status]))
+      .toEqual([["someone-else", "open"], [VESSEL_ID, "open"]])
   })
 
   // Each start is its own process, as a restart is: the store reads its rows once, when its module loads.

@@ -55,7 +55,7 @@ appendFileSync(FILE, "")
 export const rows: Row[] = await rowsIn<Row>(Bun.file(FILE).stream())
 let seq = rows.length
 // The self-check's state, read once from the rows as loaded: what it finds there was written when those rows were.
-const selfChecks = checker()
+const selfChecks = checker(VESSEL_ID)
 for (const r of rows) selfChecks.see(r)
 let wakers: Array<() => void> = []
 

@@ -52,7 +52,9 @@ const offersOf = (s: Row): Array<Offer & { cell: string; chosen: boolean }> => {
   })
 }
 
-export const checker = () => {
+// `self` is the writer the detector's own gap rows carry: only those say which compositions it holds open, so another
+// writer's row under the same gap ids cannot silence it.
+export const checker = (self?: string) => {
   // The fold's index, kept as indexOf builds it (its parity is a leg).
   const index: Index = { byId: new Map(), sels: new Map(), made: new Map(), inputs: new Map(), failed: new Set() }
   const windowRows: Row[] = []
@@ -166,7 +168,7 @@ export const checker = () => {
   const see = (r: Row): Finding[] => {
     keep(r)
     if (r.shape === FAILURE && r.role === WALK) owe(r)
-    if (r.shape === GAP && r.role === DETECTOR && String(r.gap_id ?? "").startsWith(SELF_CHECK)) {
+    if (r.shape === GAP && r.role === DETECTOR && (self === undefined || r.writer === self) && String(r.gap_id ?? "").startsWith(SELF_CHECK)) {
       const k = (r.meta as { composition?: unknown } | undefined)?.composition
       if (typeof k === "string") open.set(k, r.status === "open")
     }
