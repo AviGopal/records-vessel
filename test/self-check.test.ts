@@ -457,32 +457,33 @@ describe("records writes the gap, as its own detector, once per change", () => {
     cands: [{ id: tmpl, kind: "produce", root: "r7", ctx: "outcome,asker:detector,age:5" }], posts: [{ alpha: 2.5, beta, from: "cell" }] }, "walk-test", "walk"]
   const work: [Record<string, unknown>, string, string] = [{ shape: "gap", gap_id: "failing-test-x", status: "open", category: "failing_test" }, "pull-sync", "detector"]
 
-  test("[MUST-FAIL] a gap the self-check opens says walkable false: shown by a gap read, not a root beside a gap that is", () => {
+  test("[MUST-FAIL] a gap the self-check opens says walkable true: actionable root beside a failing_test gap", () => {
     const data = mkdtempSync(join(tmpdir(), "records-self-check-shown-"))
     try {
       const id = gapIdOf(compositionOf(`${tmpl}|outcome,asker:detector,age:5`))
       const got = booted(data, [work, offer(2), offer(2)])
-      expect(got.gaps).toEqual([["failing-test-x", "open", "pull-sync", null], [id, "open", process.env.RECORDS_VESSEL_ID, false]])
-      expect(got.roots).toEqual(["failing-test-x"])
+      expect(got.gaps).toEqual([["failing-test-x", "open", "pull-sync", null], [id, "open", process.env.RECORDS_VESSEL_ID, true]])
+      expect(got.roots).toEqual(["failing-test-x", id])
     } finally {
       rmSync(data, { recursive: true, force: true })
     }
   })
 
-  test("[MUST-FAIL] a gap it held open before its gaps said walkable false is marked once as it loads, across restarts; a closed one, and another writer's, never", () => {
+  test("[MUST-FAIL] a gap it held open before walkable true (null or false) is marked once as it loads, across restarts; closed and foreign rows never", () => {
     const data = mkdtempSync(join(tmpdir(), "records-self-check-mark-"))
     try {
       const me = String(process.env.RECORDS_VESSEL_ID)
-      const old = (seq: number, gap_id: string, status: string, writer = me) => ({ shape: "gap", gap_id, status, category: "self_check", summary: "s",
-        meta: { composition: gap_id, trigger: "repeat" }, input_refs: [], seq, t: "2026-01-01T00:00:00.000Z", writer, role: "detector", id: `old${seq}` })
+      const old = (seq: number, gap_id: string, status: string, writer = me, extra: Record<string, unknown> = {}) => ({ shape: "gap", gap_id, status, category: "self_check", summary: "s",
+        meta: { composition: gap_id, trigger: "repeat" }, input_refs: [], seq, t: "2026-01-01T00:00:00.000Z", writer, role: "detector", id: `old${seq}`, ...extra })
       mkdirSync(join(data, "store"))
-      writeFileSync(join(data, "store", "rows"), [old(1, "self-check:held", "open"), old(2, "self-check:shut", "open"), old(3, "self-check:shut", "closed"),
-        old(4, "self-check:theirs", "open", "someone-else")].map((r) => JSON.stringify(r)).join("\n") + "\n")
-      const want = [["self-check:held", "open", me, null], ["self-check:shut", "open", me, null], ["self-check:shut", "closed", me, null],
-        ["self-check:theirs", "open", "someone-else", null], ["self-check:held", "open", me, false]]
+      writeFileSync(join(data, "store", "rows"), [old(1, "self-check:held", "open"), old(2, "self-check:legacy-false", "open", me, { walkable: false }),
+        old(3, "self-check:shut", "open"), old(4, "self-check:shut", "closed"),
+        old(5, "self-check:theirs", "open", "someone-else")].map((r) => JSON.stringify(r)).join("\n") + "\n")
+      const want = [["self-check:held", "open", me, null], ["self-check:legacy-false", "open", me, false], ["self-check:shut", "open", me, null], ["self-check:shut", "closed", me, null],
+        ["self-check:theirs", "open", "someone-else", null], ["self-check:held", "open", me, true], ["self-check:legacy-false", "open", me, true]]
       const first = booted(data, [])
       expect(first.gaps).toEqual(want)
-      expect(first.roots).toEqual(["self-check:theirs"])
+      expect(first.roots).toEqual(["self-check:theirs", "self-check:held", "self-check:legacy-false"])
       expect(booted(data, []).gaps).toEqual(want)
     } finally {
       rmSync(data, { recursive: true, force: true })

@@ -199,11 +199,11 @@ export const checker = (self?: string) => {
     return []
   }
 
-  // A gap it holds open whose latest row does not say walkable false (written before its gaps said so): that row again,
-  // saying it, once. The store writes these when it loads, so no gap it holds open is worked.
-  const unmarked = (): Array<Record<string, unknown>> => [...openRow.values()].filter((r) => r.walkable !== false).map((r) => {
+  // A gap it holds open whose latest row does not yet say walkable true (written before self-check became walkable):
+  // upgraded once as it loads, so stalled/unmoved compositions become actionable outer-horizon repair targets.
+  const unmarked = (): Array<Record<string, unknown>> => [...openRow.values()].filter((r) => r.walkable !== true).map((r) => {
     const { seq: _s, t: _t, id: _i, writer: _w, role: _r, user_id: _u, ...rest } = r
-    return { ...rest, walkable: false }
+    return { ...rest, walkable: true }
   })
 
   return { see, gapsOf, unmarked, index }
@@ -211,13 +211,13 @@ export const checker = (self?: string) => {
 
 export const gapIdOf = (composition: string): string => `${SELF_CHECK}${createHash("sha256").update(composition).digest("hex").slice(0, 16)}`
 
-// An open self-check gap is shown, not worked (walkable false, which records' open-gap read honours): it is evidence that
-// a composition's expectation did not move, for the fold and for whoever reads gaps, and walking it produced no work.
+// An open self-check gap is walkable (walkable true) so the fleet can autonomously diagnose and fix unmoved
+// expectations via repository edits; closed rows clear open status.
 const gapRow = (k: string, status: "open" | "closed", f: Finding, openedBy?: string): Record<string, unknown> => ({
   shape: GAP,
   gap_id: gapIdOf(k),
   status,
-  ...(status === "open" ? { walkable: false } : {}),
+  ...(status === "open" ? { walkable: true } : {}),
   category: "self_check",
   summary: status === "open"
     ? `${k}: ${f.trigger === "failure" ? "a failure" : "a repeat with no act since its last choice"} was not reflected in its expectation at its next offer`

@@ -190,11 +190,14 @@ describe("Wave 1 — forward-arm context|<target>|<context_shape> posteriors", (
 
     // Normal cells are byte-for-byte identical whether context| cells were requested or not
     expect(mixed.slice(0, 2)).toEqual(normalOnly)
-    // fileContent: 1 win (ask1) + 1 loss (ask2) => alpha 2, beta 2
-    expect(mixed[2]).toEqual({ cell: "context|request|fileContent", alpha: 2, beta: 2, from: "cell" })
-    // gitDiff: 2 wins (ask1 + g3) + 0 losses => alpha 3, beta 1
-    expect(mixed[3]).toEqual({ cell: "context|request|gitDiff", alpha: 3, beta: 1, from: "cell" })
-    // unusedShape: no grades => prior 1/1 from "none"
+    // Counterfactual EB lift (m = 2): pBase = (2+1)/(3+2) = 0.6.
+    // gitDiff (2/2 vs complement 0/1 -> pCf = 0.4, pUse = 0.7 -> score = 0.65) > unusedShape (0.5) > fileContent (1/2 vs complement 1/1 -> score = 53/120).
+    expect(mixed[2]!.from).toBe("cell")
+    expect(mixed[2]!.alpha).toBeCloseTo(53 / 30, 9)
+    expect(mixed[2]!.beta).toBeCloseTo(67 / 30, 9)
+    expect(mixed[3]!.from).toBe("cell")
+    expect(mixed[3]!.alpha).toBeCloseTo(2.6, 9)
+    expect(mixed[3]!.beta).toBeCloseTo(1.4, 9)
     expect(mixed[4]).toEqual({ cell: "context|request|unusedShape", alpha: 1, beta: 1, from: "none" })
   })
 })

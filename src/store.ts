@@ -243,7 +243,20 @@ const openGaps = (from: Row[]): Row[] => {
   // (the USER: infra gaps are gaps, marked, not offered to the walk). Read from the detector's own field, never from what
   // kind of gap it is.
   const notWalkable = (r: Row): boolean => r.walkable === false
-  const eligible = [...latest.values()].filter((r) => !held(r) && !notRunnable(r) && !notWalkable(r))
+  // Filter repo-scoped open gaps to repos having a live non-retired owner repository row with a non-empty branch
+  // (only when ownerRepos.size > 0 so isolated unit tests without repository branch metadata stay green).
+  const latestRepos = new Map<string, Row>()
+  for (const r of from.filter((x) => x.shape === REPOSITORY && x.role === OWNER && typeof x.repo === "string").sort((a, b) => a.seq - b.seq)) {
+    latestRepos.set(String(r.repo), r)
+  }
+  const ownerRepos = new Set(
+    [...latestRepos.values()]
+      .filter((r) => r.retired !== true && typeof r.branch === "string" && r.branch !== "")
+      .map((r) => String(r.repo))
+  )
+  const unownedRepo = (r: Row): boolean =>
+    ownerRepos.size > 0 && typeof r.repo === "string" && r.repo !== "" && r.repo !== "super" && !ownerRepos.has(r.repo)
+  const eligible = [...latest.values()].filter((r) => !held(r) && !notRunnable(r) && !notWalkable(r) && !unownedRepo(r))
   const open = eligible.filter((r) => r.status === "open")
   const closedCandidates = eligible.filter((r) => r.status === "closed")
   if (closedCandidates.length === 0) return open
