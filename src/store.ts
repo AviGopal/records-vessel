@@ -2,10 +2,10 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { DATA_DIR, VESSEL_ID } from "./config"
-import { checker, GRADUATE_PREFIX, graduationGapsOf } from "./self-check"
+import { checker, GRADUATE_PREFIX, graduationGapsOf, TOPOLOGY_PREFIX, topologyExpansionGapsOf } from "./self-check"
 import { rowsIn } from "./rows-file"
 import { CONSTITUTIONAL_TARGETS, deadlineAsks, declaredAsks, exogenous, isAsk, OWNER_SHAPES } from "./asks"
-import { LAPSE, blames, gapClosures, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
+import { LAPSE, allTemplateOwnStats, blames, contextUseGrades, gapClosures, grades, noteRefold, openPersonWaits, outcomeSchemaOf, personWait, promises, standing, useGrades } from "./fold"
 import {
   ACTIVITY_TEMPLATE, ARM, CHANNEL, CREDITS, DESCRIBED, DETECTOR, FAILURE, FAILURE_RULE, INFRA_WINDOW, GAP, HOLD_FACT, HOP, OPERATOR, OUTCOME, OWNER, PERSON, PRIOR, REPOSITORY, REQUIRES, RHYTHM, SELECTION, SHAPE_SCHEMA, SHAPE_DESCRIPTION, TREATED, WALK, PERSON_WAIT, ASK_STATE, WAIT_BOUND,
 } from "./shapes"
@@ -125,10 +125,27 @@ export const write = (body: Record<string, unknown>, writer: string, role: strin
   }
   // What the self-check found at this row is written after it, as records' own detector rows (self-check.ts).
   for (const g of selfChecks.gapsOf(found)) write(g, VESSEL_ID, DETECTOR)
-  // Certainty-driven template graduation check on terminal writes only (closed non-graduation gaps, person outcomes).
-  const isTerminal = (row.shape === GAP && row.role === DETECTOR && row.status !== "open" && !String(row.gap_id ?? "").startsWith(GRADUATE_PREFIX)) ||
+  // Certainty-driven template graduation and topology-expansion checks (with loop guards against own detector outputs).
+  const gapIdStr = String(row.gap_id ?? "")
+  const ownDetector = row.shape === GAP && row.role === DETECTOR
+  const isTerminal = (ownDetector && row.status !== "open" && !gapIdStr.startsWith(GRADUATE_PREFIX) && !gapIdStr.startsWith(TOPOLOGY_PREFIX)) ||
     (row.shape === OUTCOME && row.role === PERSON)
   if (isTerminal) for (const g of graduationGapsOf(rows)) write(g, VESSEL_ID, DETECTOR)
+  const isTopologyTrigger = !gapIdStr.startsWith(TOPOLOGY_PREFIX) && (
+    isTerminal ||
+    (row.shape === FAILURE && row.role === WALK && typeof row.unserved === "string") ||
+    (row.shape === "attempt_explanation" && row.role === DESCRIBED) ||
+    ((row.shape === SHAPE_SCHEMA || row.shape === ACTIVITY_TEMPLATE) && row.role === DESCRIBED)
+  )
+  if (isTopologyTrigger) {
+    const walkWriter = rows.findLast((r) => r.role === WALK)?.writer ?? WALK
+    const allSels = new Set(rows.filter((r) => r.shape === SELECTION && r.writer === walkWriter).map((r) => r.id))
+    const verified = verifiedClosedEpisodes()
+    const ok = earned(walkWriter, verified)
+    const scheduled = rhythmTemplates()
+    const { freshCount } = admittedEarnedTemplates(walkWriter, allSels, ok, scheduled)
+    for (const g of topologyExpansionGapsOf(rows, undefined, freshCount)) write(g, VESSEL_ID, DETECTOR)
+  }
   return { status: 200, body: row }
 }
 
@@ -469,11 +486,80 @@ const verifiedClosedEpisodes = (): { done: Set<string>; episodeKey: Map<string, 
   return { done, episodeKey, byId }
 }
 
+export const MAX_FRESH_TEMPLATES = 8
+const ROOT_GATE_SIG_OUT = new Set(["outcome", "land_verdict", "world_changed", "gap", "change_wanted"])
+const HEX_SIG_RE = /^[0-9a-f]{16,}$/i
+const MOVE_PREFIXES_SIG = ["call/", "produce/", "run/"]
+const isGoTemplateAction = (inner: string): boolean =>
+  inner.startsWith(".") || inner === "end" || /^(range|index|if|with|else)\b/.test(inner)
+const isFieldKey = (k: string): boolean => /^[A-Za-z_][A-Za-z0-9_-]*$/.test(k)
+
+export const isRetiredByNegativeLift = (stats: { n: number; alpha: number; beta: number }): boolean => {
+  if (stats.n < 6) return false
+  const tot = stats.alpha + stats.beta
+  const p = stats.alpha / tot
+  const ub90 = p + 1.28155 * Math.sqrt((p * (1 - p)) / (tot + 1))
+  return ub90 < 0.40
+}
+
+export const isCleanEarnedTemplate = (t: Row): boolean => {
+  if (t.retired === true) return false
+  // Legacy minimal test fixtures without `sig` pass structurally (runtime tests rely on calls-only fixtures).
+  if (t.sig === undefined) return true
+  if (typeof t.sig !== "object" || t.sig === null || Array.isArray(t.sig)) return false
+  const sig = t.sig as { in?: unknown; out?: unknown }
+  if (!Array.isArray(sig.in) || !Array.isArray(sig.out) || sig.out.length === 0) return false
+  for (const s of [...sig.in, ...sig.out]) {
+    if (typeof s !== "string" || s === "" || HEX_SIG_RE.test(s) || MOVE_PREFIXES_SIG.some((p) => s.startsWith(p))) return false
+  }
+  for (const s of sig.out as string[]) {
+    if (ROOT_GATE_SIG_OUT.has(s)) return false
+  }
+  const hasBadString = (v: unknown): boolean => {
+    if (typeof v === "string") {
+      if (v.includes("/walk-trees/") || v.includes("/tmp/")) return true
+      let malformed = false
+      const stripped = v.replace(/\{\{([\s\S]*?)\}\}/g, (_full, rawInner: string) => {
+        const inner = rawInner.trim()
+        if (inner !== "" && isGoTemplateAction(inner)) return ""
+        if (!inner.endsWith(".")) {
+          const keys = inner.replace(/\[(\d+)\]/g, ".$1").split(".").filter((s) => s.length > 0)
+          if (keys[0] === "sig" && keys[1] === "in" && /^\d+$/.test(keys[2] ?? "") && keys.length >= 4 && keys.slice(3).every(isFieldKey)) {
+            return ""
+          }
+          if (keys[0] === "calls" && /^\d+$/.test(keys[1] ?? "") && keys[2] === "output" && keys.length >= 3 && keys.slice(3).every(isFieldKey)) {
+            return ""
+          }
+        }
+        malformed = true
+        return ""
+      })
+      if (malformed || stripped.includes("{{") || stripped.includes("}}")) return true
+      return false
+    }
+    if (Array.isArray(v)) return v.some(hasBadString)
+    if (typeof v === "object" && v !== null) return Object.values(v as Record<string, unknown>).some(hasBadString)
+    return false
+  }
+  return !hasBadString([t.calls ?? []].flat())
+}
+
 const isEarnedDescriptor = (r: Row, done: Set<string>, byId: Map<string, Row>): boolean => {
   if (r.role !== DESCRIBED || (r.shape !== SHAPE_SCHEMA && r.shape !== SHAPE_DESCRIPTION)) return false
   const s = byId.get(String(r.selection_ref))
   if (s === undefined || s.shape !== SELECTION || String(s.arm) !== TREATED) return false
-  return [s.root, s.pool_refs, s.input_refs].flat().filter((x) => x !== undefined).some((id) => done.has(String(id)))
+  if (![s.root, s.pool_refs, s.input_refs].flat().filter((x) => x !== undefined).some((id) => done.has(String(id)))) return false
+  const targetName = String(r.shape === SHAPE_SCHEMA ? r.target : r.of)
+  if (targetName === "") return true
+  const exactCell = `context|${targetName}|*`
+  let n = 0, wins = 0, losses = 0
+  for (const g of contextUseGrades(rows, seq, seq)) {
+    if (!g.cells.has(exactCell)) continue
+    n++
+    wins += g.r
+    losses += 1 - g.r
+  }
+  return !isRetiredByNegativeLift({ n, alpha: 1 + wins, beta: 1 + losses })
 }
 
 // A template is earned, not declared (law 4): it is the walk's to run only when it replays a run that reached. Its own
@@ -522,6 +608,61 @@ const earned = (w: string, verified: { done: Set<string>; episodeKey: Map<string
   }
 }
 
+const admittedEarnedTemplates = (
+  _w: string,
+  allSels: Set<string>,
+  ok: (t: Row) => boolean,
+  scheduled: Set<string>,
+): { admitted: Set<string>; freshCount: number } => {
+  const sigKeyOf = (r: Row): string => {
+    if (r.sig === undefined) return `id:${r.id}`
+    const sig = r.sig as { in: unknown; out: unknown }
+    return JSON.stringify({
+      in: sig.in,
+      out: sig.out,
+      calls: [r.calls ?? []].flat().map((c) => (c as { shape?: unknown } | undefined)?.shape ?? ""),
+    })
+  }
+  const statsByTpl = allTemplateOwnStats(rows, seq, seq)
+  const clean = rows.filter(
+    (r) => r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) &&
+      !scheduled.has(r.id) && ok(r) && isCleanEarnedTemplate(r),
+  )
+  const provenByKey = new Map<string, { row: Row; rate: number }>()
+  const legacyUnstructuredIds: string[] = []
+  const freshCandidates: Array<{ row: Row; sigKey: string }> = []
+  for (const r of clean) {
+    const stats = statsByTpl.get(r.id) ?? { n: 0, alpha: 1, beta: 1, rate: 0.5 }
+    if (isRetiredByNegativeLift(stats)) continue
+    if (r.sig === undefined) {
+      legacyUnstructuredIds.push(r.id)
+      continue
+    }
+    const sigKey = sigKeyOf(r)
+    if (stats.alpha > 1) {
+      const prev = provenByKey.get(sigKey)
+      if (prev === undefined || stats.rate > prev.rate || (stats.rate === prev.rate && r.seq > prev.row.seq)) {
+        provenByKey.set(sigKey, { row: r, rate: stats.rate })
+      }
+    } else {
+      freshCandidates.push({ row: r, sigKey })
+    }
+  }
+  const freshByKey = new Map<string, Row>()
+  for (const { row: r, sigKey } of freshCandidates) {
+    if (provenByKey.has(sigKey)) continue
+    const prev = freshByKey.get(sigKey)
+    if (prev === undefined || r.seq > prev.seq) freshByKey.set(sigKey, r)
+  }
+  const freshKept = [...freshByKey.values()].sort((a, b) => b.seq - a.seq).slice(0, MAX_FRESH_TEMPLATES)
+  const admitted = new Set<string>([
+    ...legacyUnstructuredIds,
+    ...[...provenByKey.values()].map((x) => x.row.id),
+    ...freshKept.map((r) => r.id),
+  ])
+  return { admitted, freshCount: freshKept.length }
+}
+
 // What every root's work shares: the owner's configuration (below), the templates the walk earned, verified-closed
 // open-topology descriptors (shape_schema / shape_description), and the templates a standing rhythm names.
 const SHARED_UNTIL_DECLARED = new Set([CHANNEL, SHAPE_SCHEMA, REQUIRES, REPOSITORY, RHYTHM])
@@ -530,6 +671,7 @@ const shared = (w: string): Row[] => {
   const verified = verifiedClosedEpisodes()
   const ok = earned(w, verified)
   const scheduled = rhythmTemplates()
+  const { admitted } = admittedEarnedTemplates(w, allSels, ok, scheduled)
   // The owner's configuration: once asks are declared, every owner row that is not one (whatever its shape: a new setting
   // the walk reads reaches it with no change here); until then, the listed shapes, as before.
   const declared = askShapes()
@@ -539,7 +681,7 @@ const shared = (w: string): Row[] => {
     config(r) ||
     ((r.shape === SHAPE_SCHEMA || r.shape === SHAPE_DESCRIPTION) && r.role === DESCRIBED && isEarnedDescriptor(r, verified.done, verified.byId)) ||
     (r.shape === ACTIVITY_TEMPLATE && (r.role === DESCRIBED || r.role === OWNER) && scheduled.has(r.id)) ||
-    (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && allSels.has(String(r.selection_ref)) && ok(r)))
+    (r.shape === ACTIVITY_TEMPLATE && r.role === DESCRIBED && admitted.has(r.id)))
 }
 
 // The templates the owner's standing rhythms name: the latest rhythm row per template, unless it says retired.

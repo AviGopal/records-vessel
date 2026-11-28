@@ -9,6 +9,7 @@
 // What the fold's own rules decide (which failures count, what a selection consumed) is read through the fold's own
 // functions over an index kept the way indexOf builds it.
 import { createHash } from "node:crypto"
+import { CONSTITUTIONAL_TARGETS } from "./asks"
 import { indexOf, infraWindowsOf, moveFailedIn, reached, templateOwnStats, travelOf, type Index, type InfraWindow, type Travel } from "./fold"
 import { ACTIVITY_TEMPLATE, CREDITS, DESCRIBED, DETECTOR, FAILURE, GAP, HOP, INFRA_WINDOW, OUTCOME, OWNER, SELECTION, SHAPE_SCHEMA, TREATED, WALK } from "./shapes"
 import type { Row } from "./store"
@@ -285,6 +286,7 @@ export const graduationGapsOf = (rows: Row[], existingGapRows?: Row[]): Array<Re
           shape: GAP,
           gap_id: gapId,
           status: "open",
+          walkable: true,
           category: "resolver_graduation",
           severity: "low",
           repo: "local-tools-vessel",
@@ -304,6 +306,168 @@ export const graduationGapsOf = (rows: Row[], existingGapRows?: Row[]): Array<Re
         summary: `Template ${tpl.id} dropped below graduation threshold (alpha=${stats.alpha.toFixed(2)}, beta=${stats.beta.toFixed(2)}, n=${stats.n}, rate=${(stats.rate * 100).toFixed(1)}%)`,
         input_refs: [tpl.id],
         meta: { template_id: tpl.id, sig: tpl.sig, alpha: stats.alpha, beta: stats.beta, n: stats.n, rate: stats.rate },
+      })
+    }
+  }
+  return out
+}
+
+export const TOPOLOGY_PREFIX = "topology-expansion:"
+const TOPOLOGY_MIN_ROOTS = 3
+const TOPOLOGY_FRESH_CAP = 8
+
+// Persistence-gated topology-expansion detector (`E1`): opens a walkable detector gap when >= 3 distinct root
+// episodes encounter either an unserved non-constitutional shape demand or >= 2-explanation route-around friction,
+// gated by fresh-template headroom (`activeFreshTemplates < 8`), and closes it once a schema or proven template covers it.
+export const topologyExpansionGapsOf = (
+  rows: Row[],
+  existingGapRows?: Row[],
+  activeFreshTemplates = 0,
+): Array<Record<string, unknown>> => {
+  const head = rows.reduce((m, r) => Math.max(m, r.seq), 0)
+  const gapSource = existingGapRows ?? rows.filter((r) => r.shape === GAP && r.role === DETECTOR)
+  const openTop = new Map<string, Row>()
+  for (const g of [...gapSource].filter((r) => String(r.gap_id ?? "").startsWith(TOPOLOGY_PREFIX)).sort((a, b) => a.seq - b.seq)) {
+    const id = String(g.gap_id)
+    if (g.status === "open") openTop.set(id, g)
+    else openTop.delete(id)
+  }
+  const hasHeadroom = activeFreshTemplates < TOPOLOGY_FRESH_CAP
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const sels = new Map(rows.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+  const epOf = (rootId: string): string => {
+    const r = byId.get(rootId)
+    return r !== undefined && r.shape === GAP && r.role === DETECTOR && r.gap_id !== undefined
+      ? `gap:${String(r.gap_id)}`
+      : `id:${rootId}`
+  }
+
+  const out: Array<Record<string, unknown>> = []
+
+  // Signal 1: Unserved non-constitutional shape across >= 3 distinct root episodes.
+  const unservedDemands = new Map<string, { roots: Set<string>; refIds: string[] }>()
+  for (const r of rows) {
+    if (r.shape !== FAILURE || r.role !== WALK || r.kind !== undefined || r.waits_for === "person") continue
+    if (typeof r.unserved !== "string" || r.unserved.trim() === "") continue
+    const tok = r.unserved.trim().split(/[\s:(]/)[0] ?? ""
+    if (tok === "" || tok === "protect_list" || tok.includes("/") || CONSTITUTIONAL_TARGETS.has(tok)) continue
+    const rootId = typeof r.root === "string"
+      ? r.root
+      : typeof sels.get(String(r.selection_ref))?.root === "string"
+        ? String(sels.get(String(r.selection_ref))!.root)
+        : undefined
+    if (rootId === undefined) continue
+    const ep = epOf(rootId)
+    let entry = unservedDemands.get(tok)
+    if (entry === undefined) {
+      entry = { roots: new Set<string>(), refIds: [] }
+      unservedDemands.set(tok, entry)
+    }
+    if (!entry.roots.has(ep)) {
+      entry.roots.add(ep)
+      entry.refIds.push(r.id)
+    }
+  }
+  const latestSchemas = new Map<string, Row>()
+  for (const x of [...rows].filter((r) => r.shape === SHAPE_SCHEMA && (r.role === OWNER || r.role === DESCRIBED)).sort((a, b) => a.seq - b.seq)) {
+    latestSchemas.set(`${String(x.target)}|${String(x.variant ?? "")}`, x)
+  }
+  const shapeCovered = (tok: string): boolean =>
+    [...latestSchemas.values()].some((x) => x.retired !== true && String(x.target) === tok) ||
+    rows.some((x) =>
+      x.shape === ACTIVITY_TEMPLATE && x.retired !== true &&
+      Array.isArray((x.sig as { out?: unknown })?.out) &&
+      ((x.sig as { out: unknown[] }).out).includes(tok) &&
+      (x.role === OWNER || templateOwnStats(rows, x.id, head, head).alpha > 1))
+
+  for (const [tok, { roots, refIds }] of unservedDemands) {
+    const gapId = `${TOPOLOGY_PREFIX}shape:${tok}`
+    const isOpen = openTop.has(gapId)
+    const covered = shapeCovered(tok)
+    if (roots.size >= TOPOLOGY_MIN_ROOTS && !covered && !isOpen && hasHeadroom) {
+      out.push({
+        shape: GAP,
+        gap_id: gapId,
+        status: "open",
+        walkable: true,
+        category: "topology_expansion",
+        severity: "medium",
+        repo: null,
+        summary: `Unserved non-constitutional shape "${tok}" blocked ${roots.size} distinct root episodes; declare a non-constitutional shape_schema or earn a producing activity_template`,
+        input_refs: refIds.slice(0, 5),
+        meta: { kind: "unserved_shape", target_shape: tok, distinct_roots: roots.size },
+      })
+    } else if (isOpen && covered) {
+      out.push({
+        shape: GAP,
+        gap_id: gapId,
+        status: "closed",
+        category: "topology_expansion",
+        severity: "medium",
+        repo: null,
+        summary: `Topology demand for "${tok}" is now covered by a non-retired schema or proven template`,
+        input_refs: refIds.slice(0, 5),
+        meta: { kind: "unserved_shape", target_shape: tok, distinct_roots: roots.size },
+      })
+    }
+  }
+
+  // Signal 2: Multi-explanation route-around (>= 2 attempt_explanation rows per episode across >= 3 distinct episodes).
+  const explByClass = new Map<string, Map<string, { count: number; maxSeq: number; refId: string }>>()
+  for (const r of rows) {
+    if (r.shape !== "attempt_explanation" || r.role !== DESCRIBED) continue
+    const sel = typeof r.selection_ref === "string" ? sels.get(r.selection_ref) : undefined
+    const rootId = typeof r.root === "string" ? r.root : typeof sel?.root === "string" ? String(sel.root) : ""
+    if (rootId === "") continue
+    const rootRow = byId.get(rootId)
+    const cls = typeof rootRow?.repo === "string" && rootRow.repo !== "" ? rootRow.repo : "unscoped"
+    const ep = epOf(rootId)
+    let byEp = explByClass.get(cls)
+    if (byEp === undefined) {
+      byEp = new Map()
+      explByClass.set(cls, byEp)
+    }
+    const prev = byEp.get(ep)
+    if (prev === undefined) byEp.set(ep, { count: 1, maxSeq: r.seq, refId: r.id })
+    else { prev.count += 1; prev.maxSeq = Math.max(prev.maxSeq, r.seq) }
+  }
+  const routeCovered = (earliestMaxSeq: number): boolean =>
+    rows.some((x) => x.seq > earliestMaxSeq && x.retired !== true && x.role === DESCRIBED && x.shape === SHAPE_SCHEMA) ||
+    rows.some((x) =>
+      x.seq > earliestMaxSeq && x.retired !== true && x.role === DESCRIBED && x.shape === ACTIVITY_TEMPLATE &&
+      Array.isArray(x.calls) && x.calls.length >= 2 && templateOwnStats(rows, x.id, head, head).alpha > 1)
+
+  for (const [cls, byEp] of explByClass) {
+    const qualifying = [...byEp.values()].filter((e) => e.count >= 2)
+    if (qualifying.length === 0) continue
+    const earliestMaxSeq = Math.min(...qualifying.map((e) => e.maxSeq))
+    const gapId = `${TOPOLOGY_PREFIX}route:${cls}`
+    const isOpen = openTop.has(gapId)
+    const covered = routeCovered(earliestMaxSeq)
+    if (qualifying.length >= TOPOLOGY_MIN_ROOTS && !covered && !isOpen && hasHeadroom) {
+      out.push({
+        shape: GAP,
+        gap_id: gapId,
+        status: "open",
+        walkable: true,
+        category: "topology_expansion",
+        severity: "medium",
+        repo: cls === "unscoped" ? null : cls,
+        summary: `${qualifying.length} distinct root episodes required >= 2 attempt_explanations in "${cls}"; compose a cleaner intermediate schema or proven workflow template`,
+        input_refs: qualifying.slice(0, 5).map((e) => e.refId),
+        meta: { kind: "multi_explanation_route", target_class: cls, distinct_roots: qualifying.length },
+      })
+    } else if (isOpen && covered) {
+      out.push({
+        shape: GAP,
+        gap_id: gapId,
+        status: "closed",
+        category: "topology_expansion",
+        severity: "medium",
+        repo: cls === "unscoped" ? null : cls,
+        summary: `Route-around friction in "${cls}" is now covered by a newer schema or proven workflow template`,
+        input_refs: qualifying.slice(0, 5).map((e) => e.refId),
+        meta: { kind: "multi_explanation_route", target_class: cls, distinct_roots: qualifying.length },
       })
     }
   }

@@ -662,7 +662,8 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
       }
     }
   }
-  // Premature `request { none }` abandonment on an open actionable detector gap debits the treated produce/request selection.
+  // Premature `request { none }` abandonment on an open actionable detector gap debits the treated produce/request selection,
+  // unless an explicit `change_wanted { wanted: false }` already settled the gap before the abstention.
   const factPrefixes = holdPrefixesOf(seen)
   const gapsById = new Map<string, Row[]>()
   for (const r of seen.filter((x) => x.shape === GAP && x.role === DETECTOR && x.gap_id !== undefined).sort((a, b) => a.seq - b.seq)) {
@@ -671,6 +672,9 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     if (list) list.push(r)
     else gapsById.set(k, [r])
   }
+  const changeWantedRows = seen
+    .filter((x) => x.shape === "change_wanted" && x.role === DESCRIBED)
+    .sort((a, b) => a.seq - b.seq)
   for (const r of seen.filter((x) => x.shape === "request" && x.role === DESCRIBED && x.seq <= asOf)) {
     if (typeof r.none !== "string" || r.none === "" || (r.pointer !== undefined && r.pointer !== null)) continue
     const s = sels.get(String(r.selection_ref))
@@ -678,8 +682,24 @@ const moveFailuresOf = (all: Row[], asOf: number, atSeq: number): Grade[] => {
     if (inInfraWindow(r, windows) || typeof s.root !== "string") continue
     const rootRow = byId.get(s.root)
     if (rootRow === undefined || rootRow.shape !== GAP || rootRow.role !== DETECTOR || rootRow.gap_id === undefined) continue
-    const latestGap = (gapsById.get(String(rootRow.gap_id)) ?? []).filter((g) => g.seq < r.seq).at(-1)
+    const gapHistory = (gapsById.get(String(rootRow.gap_id)) ?? []).filter((g) => g.seq < r.seq)
+    const latestGap = gapHistory.at(-1)
     if (latestGap === undefined || !isActionableGapRow(latestGap, factPrefixes)) continue
+    let prevCloseSeq = 0
+    for (const g of gapHistory) {
+      if (g.status !== "open") prevCloseSeq = g.seq
+    }
+    const curEpisodeGaps = gapHistory.filter((g) => g.seq > prevCloseSeq)
+    const epIds = new Set<string>([s.root, ...curEpisodeGaps.map((g) => g.id)])
+    let latestCw: Row | undefined
+    for (const cw of changeWantedRows) {
+      if (cw.seq >= r.seq) break
+      if (cw.seq <= prevCloseSeq) continue
+      if ((typeof cw.root === "string" && epIds.has(cw.root)) || [cw.input_refs].flat().some((id) => epIds.has(String(id)))) {
+        latestCw = cw
+      }
+    }
+    if (latestCw?.wanted === false) continue
     out.set(`none|${s.id}`, {
       id: r.id, ok: true, r: 0, judged: s.id, key: `none|${s.id}`,
       cells: new Set([String(s.cell)]), weights: new Map([[String(s.cell), 1]]),
@@ -1030,9 +1050,9 @@ export const drainRefolds = (): Refold[] => { const out = refolds; refolds = [];
 // A derivation kept the same way outside the fold (store.ts's ask states) says its miss here too.
 export const noteRefold = (r: Refold): void => { refolds.push(r) }
 
-const memo = (f: (all: Row[], asOf: number, atSeq: number) => Grade[]) => {
-  const byList = new WeakMap<Row[], { n: number; at: Map<string, Grade[]> }>()
-  return (all: Row[], asOf: number, atSeq: number): Grade[] => {
+const memo = <T>(f: (all: Row[], asOf: number, atSeq: number) => T) => {
+  const byList = new WeakMap<Row[], { n: number; at: Map<string, T> }>()
+  return (all: Row[], asOf: number, atSeq: number): T => {
     let c = byList.get(all)
     if (c === undefined || c.n !== all.length) { c = { n: all.length, at: new Map() }; byList.set(all, c) }
     const k = `${asOf}|${atSeq}`
@@ -1341,23 +1361,40 @@ const latestGradesOf = (all: Row[], asOf: number, atSeq: number, t: Travel | und
   return [...new Map([...originated, ...moveFailures(all, asOf, atSeq), ...closures.map((k) => by(k, "w_close")), ...promised, ...landed, ...useGrades(all, asOf, atSeq)].map((k) => [k.key, k])).values()]
 }
 
-// Own move-level graded statistics for a template `run/<tplId>`, isolated from kind-level inheritance and prior_count.
-export const templateOwnStats = (all: Row[], tplId: string, asOf: number, atSeq: number): { n: number; alpha: number; beta: number; rate: number } => {
+// Own move-level graded statistics across all `run/<tplId>` moves in one pass (O(|grades|), memoized).
+const allTemplateOwnStatsOf = (all: Row[], asOf: number, atSeq: number): Map<string, { n: number; alpha: number; beta: number; rate: number }> => {
   const t = travelOf(all.filter((r) => r.seq <= atSeq))
-  const target = `run/${tplId}`
-  let n = 0, wins = 0, losses = 0
+  const acc = new Map<string, { n: number; wins: number; losses: number }>()
   for (const k of latestGradesOf(all, asOf, atSeq, t)) {
-    let w = 0
-    for (const [x, g] of k.weights) if (move(x) === target && g > w) w = g
-    if (w <= 0) continue
-    n++
-    wins += k.r * w
-    losses += (1 - k.r) * w
+    const byTpl = new Map<string, number>()
+    for (const [x, g] of k.weights) {
+      const mv = move(x)
+      if (!mv.startsWith("run/") || g <= 0) continue
+      const tplId = mv.slice(4)
+      const prev = byTpl.get(tplId) ?? 0
+      if (g > prev) byTpl.set(tplId, g)
+    }
+    for (const [tplId, w] of byTpl) {
+      let s = acc.get(tplId)
+      if (s === undefined) { s = { n: 0, wins: 0, losses: 0 }; acc.set(tplId, s) }
+      s.n++
+      s.wins += k.r * w
+      s.losses += (1 - k.r) * w
+    }
   }
-  const alpha = 1 + wins
-  const beta = 1 + losses
-  return { n, alpha, beta, rate: alpha / (alpha + beta) }
+  const out = new Map<string, { n: number; alpha: number; beta: number; rate: number }>()
+  for (const [tplId, s] of acc) {
+    const alpha = 1 + s.wins
+    const beta = 1 + s.losses
+    out.set(tplId, { n: s.n, alpha, beta, rate: alpha / (alpha + beta) })
+  }
+  return out
 }
+export const allTemplateOwnStats = memo(allTemplateOwnStatsOf)
+
+// Own move-level graded statistics for a template `run/<tplId>`, isolated from kind-level inheritance and prior_count.
+export const templateOwnStats = (all: Row[], tplId: string, asOf: number, atSeq: number): { n: number; alpha: number; beta: number; rate: number } =>
+  allTemplateOwnStats(all, asOf, atSeq).get(tplId) ?? { n: 0, alpha: 1, beta: 1, rate: 0.5 }
 
 export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: number): Array<Post & { from: Level }> => {
   const priors = all.filter((r) => r.seq <= atSeq).filter((r) => r.shape === PRIOR).filter((r) => r.role === OWNER)
@@ -1365,8 +1402,54 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   const latest = latestGradesOf(all, asOf, atSeq, t)
   // Fast path: context| grades are only computed when at least one requested cell asks for context|<target>|<shape>,
   // and stay strictly isolated from normal cell/move/kind indexes so normal posteriors are byte-for-byte unchanged.
-  const isCtx = (c: unknown): c is string => typeof c === "string" && c.startsWith("context|")
+  const isCtx = (c: unknown): c is `context|${string}` => typeof c === "string" && c.startsWith("context|")
   const wantContext = cells.some(isCtx)
+  const isRoot = (c: unknown): c is `root:${string}` => typeof c === "string" && c.startsWith("root:")
+  const wantRoot = cells.some(isRoot)
+  type StatSum = { wins: number; losses: number }
+  const rootByEp = new Map<string, StatSum>()
+  const rootByAsker = new Map<string, StatSum>()
+  const rootByKind = new Map<string, StatSum>()
+  const rootGapEpKey = new Map<string, string>()
+  if (wantRoot) {
+    const seenRoot = all.filter((r) => r.seq <= atSeq)
+    const byIdRoot = new Map(seenRoot.map((r) => [r.id, r]))
+    const selsRoot = new Map(seenRoot.filter((r) => r.shape === SELECTION).map((r) => [r.id, r]))
+    for (const r of seenRoot) {
+      if (r.shape === GAP && r.role === DETECTOR && r.gap_id !== undefined) {
+        rootGapEpKey.set(r.id, `gap:${String(r.role)}:${String(r.gap_id)}`)
+      }
+    }
+    const addStat = (m: Map<string, StatSum>, k: string, win: number, loss: number): void => {
+      const s = m.get(k)
+      if (s === undefined) m.set(k, { wins: win, losses: loss })
+      else { s.wins += win; s.losses += loss }
+    }
+    for (const k of latest) {
+      const kRow = byIdRoot.get(k.id)
+      const jRow = byIdRoot.get(k.judged)
+      let rootRow: Row | undefined
+      if (kRow !== undefined && kRow.shape === GAP && kRow.role === DETECTOR && kRow.gap_id !== undefined) {
+        rootRow = kRow
+      } else {
+        const jSel = jRow !== undefined && typeof jRow.selection_ref === "string" ? selsRoot.get(jRow.selection_ref) : undefined
+        const firstRef = jRow !== undefined ? [jRow.input_refs].flat().find((x) => x !== undefined) : undefined
+        const rootId = selsRoot.get(k.judged)?.root ?? kRow?.root ?? jRow?.root ?? jSel?.root ?? firstRef
+        rootRow = typeof rootId === "string" ? byIdRoot.get(rootId) : undefined
+      }
+      if (rootRow === undefined) continue
+      const wt = k.weights.size > 0 ? Math.max(0, ...k.weights.values()) : 1
+      if (wt <= 0) continue
+      const win = k.r * wt
+      const loss = (1 - k.r) * wt
+      const rKind = String(rootRow.shape)
+      const rAsker = `asker:${String(rootRow.role)}`
+      const epKey = rootGapEpKey.get(rootRow.id) ?? `id:${rootRow.id}`
+      addStat(rootByEp, epKey, win, loss)
+      addStat(rootByAsker, `${rKind}|${rAsker}`, win, loss)
+      addStat(rootByKind, rKind, win, loss)
+    }
+  }
   const ctxByCell = new Map<string, Grade[]>()
   if (wantContext) {
     for (const k of contextUseGrades(all, asOf, atSeq)) {
@@ -1415,7 +1498,7 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
   // null cell names none, as records' has-field reads take it.
   const defaultPrior = priors.filter((r) => r.default === true && r.cell == null).at(-1)
   const anyCell = latest.some((k) => k.cells.size > 0)
-  if (anyCell) for (const c of cells) if (!isCtx(c)) part(c)
+  if (anyCell) for (const c of cells) if (!isCtx(c) && !isRoot(c)) part(c)
   return cells.map((c) => {
     const own = priors.filter((r) => String(r.cell) === c)
     const p0 = own.reduce((_, r) => ({ alpha: Number(r.alpha0), beta: Number(r.beta0) }), { alpha: 1, beta: 1 })
@@ -1452,6 +1535,44 @@ export const foldFrom = (all: Row[], cells: string[], asOf: number, atSeq: numbe
       const score = 0.5 + 0.5 * (pUse - pCf)
       const eff = nS + m
       return { cell: c, alpha: eff * score, beta: eff * (1 - score), from: "cell" }
+    }
+    if (isRoot(c)) {
+      const rest = c.slice(5)
+      const bar = rest.indexOf("|")
+      const rKind = bar < 0 ? rest : rest.slice(0, bar)
+      const tail = bar < 0 ? "" : rest.slice(bar + 1)
+      const tokens = tail === "" ? [] : tail.split(",")
+      const rAsker = tokens.find((x) => x.startsWith("asker:"))
+      const rawId = tokens.find((x) => x.startsWith("id:"))?.slice(3)
+      const epKey = rawId !== undefined ? (rootGapEpKey.get(rawId) ?? `id:${rawId}`) : undefined
+      const ownS = epKey !== undefined ? rootByEp.get(epKey) : undefined
+      const askerS = rAsker !== undefined ? rootByAsker.get(`${rKind}|${rAsker}`) : undefined
+      const kindS = rootByKind.get(rKind)
+      const wOwn = ownS?.wins ?? 0
+      const lOwn = ownS?.losses ?? 0
+      const nOwn = wOwn + lOwn
+      if (own.length > 0) {
+        return { cell: c, alpha: p0.alpha + wOwn, beta: p0.beta + lOwn, from: nOwn > 0 ? "cell" : "none" }
+      }
+      const wKindEx = Math.max(0, (kindS?.wins ?? 0) - wOwn)
+      const lKindEx = Math.max(0, (kindS?.losses ?? 0) - lOwn)
+      const nKindEx = wKindEx + lKindEx
+      const wAskerEx = Math.max(0, (askerS?.wins ?? 0) - wOwn)
+      const lAskerEx = Math.max(0, (askerS?.losses ?? 0) - lOwn)
+      const nAskerEx = wAskerEx + lAskerEx
+      const b = start()
+      if (nKindEx <= 0 && nAskerEx <= 0 && nOwn <= 0) {
+        return { cell: c, alpha: b.alpha, beta: b.beta, from: "none" }
+      }
+      const m = 2
+      const baseMean = b.alpha / (b.alpha + b.beta)
+      const pKind = nKindEx > 0 ? (wKindEx + m * baseMean) / (nKindEx + m) : baseMean
+      const pAsker = nAskerEx > 0 ? (wAskerEx + m * pKind) / (nAskerEx + m) : pKind
+      const hasCoarse = nAskerEx > 0 || nKindEx > 0
+      const alphaPrior = hasCoarse ? m * pAsker : b.alpha
+      const betaPrior = hasCoarse ? m * (1 - pAsker) : b.beta
+      const from: Level = nOwn > 0 ? "cell" : nAskerEx > 0 ? "asker" : "kind"
+      return { cell: c, alpha: alphaPrior + wOwn, beta: betaPrior + lOwn, from }
     }
     const pc = anyCell ? parts.get(c) : undefined
     const levels: Array<[Level, (x: string) => boolean]> = [
